@@ -10,7 +10,12 @@ import {
   addEdge
 } from '@xyflow/react'
 import { getLayoutedElements, type ElkLayoutOptions } from '../lib/elkLayout'
-import type { ProjectSymbols, ExtractedSymbol, SymbolKind } from '../../../preload/index.d'
+import type {
+  ProjectSymbols,
+  ExtractedSymbol,
+  SymbolKind,
+  CallEdge
+} from '../../../preload/index.d'
 
 // =============================================================================
 // TYPES
@@ -128,6 +133,32 @@ function symbolsToNodes(symbols: ExtractedSymbol[]): Node[] {
     style: {
       ...getSymbolStyle(symbol.kind, symbol.exported),
       width: Math.max(120, symbol.name.length * 8 + 40)
+    }
+  }))
+}
+
+/**
+ * Convert call edges to React Flow edges with call graph styling
+ */
+function callEdgesToFlowEdges(callEdges: CallEdge[]): Edge[] {
+  return callEdges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    type: 'default',
+    animated: false,
+    style: {
+      stroke: '#22d3ee', // Cyan color for call edges
+      strokeWidth: 1.5
+    },
+    markerEnd: {
+      type: 'arrowclosed' as const,
+      color: '#22d3ee',
+      width: 12,
+      height: 12
+    },
+    data: {
+      callSite: edge.callSite
     }
   }))
 }
@@ -561,6 +592,7 @@ interface GraphState {
   setZoomLevel: (level: ZoomLevel) => void
   layoutCurrentLevel: () => Promise<void>
   loadSymbols: () => Promise<void>
+  resetSymbols: () => void
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
@@ -596,7 +628,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   loadSymbols: async () => {
-    const { projectSymbols, symbolsLoading, nodesByLevel, layoutedLevels } = get()
+    const { projectSymbols, symbolsLoading, nodesByLevel, edgesByLevel, layoutedLevels } = get()
 
     console.log('[GraphStore] loadSymbols called', {
       symbolsLoading,
@@ -635,25 +667,79 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       console.log('[GraphStore] All symbols:', allSymbols)
 
       const symbolNodesList = symbolsToNodes(allSymbols)
-      console.log('[GraphStore] Symbol nodes:', symbolNodesList)
+      console.log('[GraphStore] Symbol nodes:', symbolNodesList.length)
 
+      // Build a set of valid node IDs for edge validation
+      const validNodeIds = new Set(symbolNodesList.map((node) => node.id))
+
+      // Convert call edges to React Flow edges and filter out invalid edges
+      // (edges that reference nodes that don't exist, like class methods)
+      const callEdges = result.callEdges || []
+      const validCallEdges = callEdges.filter((edge) => {
+        const sourceExists = validNodeIds.has(edge.source)
+        const targetExists = validNodeIds.has(edge.target)
+        if (!sourceExists || !targetExists) {
+          console.log('[GraphStore] Filtering out invalid edge:', edge.id, {
+            source: edge.source,
+            sourceExists,
+            target: edge.target,
+            targetExists
+          })
+        }
+        return sourceExists && targetExists
+      })
       console.log(
-        `[GraphStore] Loaded ${allSymbols.length} symbols from ${result.files.length} files`
+        `[GraphStore] Call edges: ${callEdges.length} total, ${validCallEdges.length} valid`
       )
 
-      // Update store with new symbols
+      const symbolEdgesList = callEdgesToFlowEdges(validCallEdges)
+      console.log('[GraphStore] Symbol edges:', symbolEdgesList.length)
+
+      console.log(
+        `[GraphStore] Loaded ${allSymbols.length} symbols and ${callEdges.length} call edges from ${result.files.length} files`
+      )
+
+      // Run ELK layout on the symbol nodes BEFORE updating the store
+      let layoutedSymbolNodes = symbolNodesList
+      if (symbolNodesList.length > 0) {
+        try {
+          console.log('[GraphStore] Running ELK layout on', symbolNodesList.length, 'symbols...')
+          const options = LAYOUT_OPTIONS['symbol']
+          const layoutResult = await getLayoutedElements(symbolNodesList, symbolEdgesList, options)
+          layoutedSymbolNodes = layoutResult.nodes
+          console.log(
+            '[GraphStore] ELK layout completed, layouted nodes:',
+            layoutedSymbolNodes.length
+          )
+          console.log('[GraphStore] First node position:', layoutedSymbolNodes[0]?.position)
+        } catch (layoutError) {
+          console.error('[GraphStore] ELK layout failed, using unlayouted nodes:', layoutError)
+          // Continue with unlayouted nodes
+        }
+      } else {
+        console.log('[GraphStore] No symbols to layout')
+      }
+
+      // Get fresh state to avoid stale closure issues
+      const currentState = get()
+
+      // Update store with laid out nodes
       set({
         projectSymbols: result,
         symbolsLoading: false,
         nodesByLevel: {
-          ...nodesByLevel,
-          symbol: symbolNodesList
+          ...currentState.nodesByLevel,
+          symbol: layoutedSymbolNodes
         },
-        // Clear layout cache for symbol level so it gets re-laid out
-        layoutedLevels: new Set([...layoutedLevels].filter((l) => l !== 'symbol'))
+        edgesByLevel: {
+          ...currentState.edgesByLevel,
+          symbol: symbolEdgesList
+        },
+        // Mark symbol level as laid out
+        layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol'])
       })
 
-      console.log('[GraphStore] Store updated with symbols')
+      console.log('[GraphStore] Store updated. Symbol nodes count:', layoutedSymbolNodes.length)
     } catch (error) {
       console.error('[GraphStore] Failed to load symbols:', error)
       set({
@@ -721,6 +807,30 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         )
       }
     })
+  },
+
+  resetSymbols: () => {
+    console.log('[GraphStore] Resetting symbols...')
+    const { layoutedLevels } = get()
+    set({
+      projectSymbols: null,
+      symbolsLoading: false,
+      symbolsError: null,
+      nodesByLevel: {
+        system: systemNodes,
+        layer: layerNodes,
+        construct: constructNodes,
+        symbol: []
+      },
+      edgesByLevel: {
+        system: systemEdges,
+        layer: layerEdges,
+        construct: constructEdges,
+        symbol: []
+      },
+      layoutedLevels: new Set([...layoutedLevels].filter((l) => l !== 'symbol'))
+    })
+    console.log('[GraphStore] Symbols reset complete')
   }
 }))
 

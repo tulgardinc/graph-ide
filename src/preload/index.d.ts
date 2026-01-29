@@ -37,4 +37,10 @@ declare global {
 
 // Re-export types for convenience in renderer
 export type { ProjectSymbols, ExtractorOptions, MapIdeAPI }
-export type { ExtractedSymbol, FileSymbols, SymbolKind, FileParseError } from '../main/types'
+export type {
+  ExtractedSymbol,
+  FileSymbols,
+  SymbolKind,
+  FileParseError,
+  CallEdge
+} from '../main/types'

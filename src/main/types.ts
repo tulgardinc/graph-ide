@@ -50,6 +50,23 @@ export interface FileSymbols {
 }
 
 /**
+ * A call relationship between two symbols
+ */
+export interface CallEdge {
+  /** Unique edge ID: "caller->callee" */
+  id: string
+  /** Caller symbol ID (filePath:name) */
+  source: string
+  /** Callee symbol ID (filePath:name) */
+  target: string
+  /** Where the call happens */
+  callSite: {
+    file: string
+    line: number
+  }
+}
+
+/**
  * Complete project symbol extraction result
  */
 export interface ProjectSymbols {
@@ -57,6 +74,8 @@ export interface ProjectSymbols {
   projectRoot: string
   /** All files with their symbols */
   files: FileSymbols[]
+  /** Call relationships between symbols */
+  callEdges: CallEdge[]
   /** Total number of symbols across all files */
   totalSymbols: number
   /** Total number of files scanned */

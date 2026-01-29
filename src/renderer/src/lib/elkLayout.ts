@@ -36,12 +36,22 @@ export async function getLayoutedElements(
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
   const opts = { ...defaultOptions, ...options }
 
+  console.log(
+    '[ELK] getLayoutedElements called with',
+    nodes.length,
+    'nodes and',
+    edges.length,
+    'edges'
+  )
+
   // Convert React Flow nodes to ELK nodes
   const elkNodes: ElkNode[] = nodes.map((node) => ({
     id: node.id,
     width: getNodeWidth(node),
     height: getNodeHeight(node)
   }))
+
+  console.log('[ELK] First ELK node:', elkNodes[0])
 
   // Convert React Flow edges to ELK edges
   const elkEdges: ElkExtendedEdge[] = edges.map((edge) => ({
@@ -67,7 +77,9 @@ export async function getLayoutedElements(
   }
 
   // Compute the layout
+  console.log('[ELK] Running elk.layout...')
   const layoutedGraph = await elk.layout(elkGraph)
+  console.log('[ELK] Layout complete. First child:', layoutedGraph.children?.[0])
 
   // Map the computed positions back to React Flow nodes
   const layoutedNodes = nodes.map((node) => {
@@ -83,6 +95,8 @@ export async function getLayoutedElements(
     }
     return node
   })
+
+  console.log('[ELK] First layouted node position:', layoutedNodes[0]?.position)
 
   return {
     nodes: layoutedNodes,

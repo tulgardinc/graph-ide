@@ -2,115 +2,155 @@
 
 ## Current Work Focus
 
-**Feature**: Tree-sitter Symbol Extractor for TypeScript codebases
+### Recently Completed: Call Graph Optimization & Unit Tests
 
-This feature enables Map IDE to parse TypeScript/TSX projects and extract all top-level symbols (functions, classes, interfaces, types, enums, constants, variables) for display in the Construct/Symbol zoom levels.
+- Refactored `findContainingFunction` → `findContainingFunctionByAncestors()` using ts-morph's `getAncestors()`
+- Changed from O(n × functions) to O(n × depth) complexity per call expression
+- Added comprehensive Vitest test suite (24 tests, all passing)
+- Test coverage: function declarations, arrow functions, class methods, edge cases, performance
+
+**Feature**: ts-morph Symbol Extractor with Call Graph for TypeScript codebases
+
+This feature enables Map IDE to parse TypeScript/TSX projects, extract all top-level symbols, and **build a call graph** showing which functions call which other functions. Uses ts-morph for semantic analysis instead of tree-sitter.
 
 ## Recent Changes (Latest Session)
 
-### Tree-sitter Symbol Extractor Implementation
+### Migration from tree-sitter to ts-morph
 
-1. **Installed dependencies**:
-   - `tree-sitter` - Native Node.js parser library
-   - `tree-sitter-typescript` - TypeScript/TSX grammar
+1. **Dependency changes**:
+   - Removed: `tree-sitter`, `tree-sitter-typescript`
+   - Added: `ts-morph` - TypeScript compiler wrapper with semantic analysis
 
-2. **Created new main process files**:
-   - `src/main/types.ts` - Type definitions for extracted symbols
-   - `src/main/fileWalker.ts` - Recursive directory traversal for TS/TSX files
-   - `src/main/symbolExtractor.ts` - Tree-sitter parsing and symbol extraction
+2. **Updated type definitions** (`src/main/types.ts`):
+   - Added `CallEdge` interface for call graph relationships
+   - Updated `ProjectSymbols` to include `callEdges` array
 
-3. **Updated main process** (`src/main/index.ts`):
-   - Added CLI argument parsing for project path
-   - Added IPC handlers:
-     - `project:getPath` - Get current project path
-     - `project:setPath` - Set project path
-     - `project:scan` - Scan current project for symbols
-     - `project:scanDir` - Scan arbitrary directory for symbols
+3. **Rewrote symbol extractor** (`src/main/symbolExtractor.ts`):
+   - Uses ts-morph Project to load and analyze TypeScript files
+   - Extracts symbols: functions, classes, interfaces, types, enums, constants, variables
+   - **NEW**: Builds call graph by analyzing CallExpressions
+   - Resolves call targets using ts-morph's type checker
+   - Returns both symbols (nodes) AND call edges
 
-4. **Updated preload bridge** (`src/preload/index.ts` & `index.d.ts`):
-   - Exposed API methods to renderer:
-     - `window.api.getProjectPath()`
-     - `window.api.setProjectPath(path)`
-     - `window.api.scanProject(options?)`
-     - `window.api.scanDirectory(path, options?)`
+4. **Updated graphStore** (`src/renderer/src/store/graphStore.ts`):
+   - Added `CallEdge` import
+   - Added `callEdgesToFlowEdges()` function to convert call edges to React Flow edges
+   - Updated `loadSymbols()` to also store call edges in `edgesByLevel.symbol`
+   - Call edges styled with cyan color (#22d3ee)
 
-5. **Created test project** (`test-project/`):
-   - Sample TypeScript project with 6 files
-   - Includes: functions, classes, interfaces, types, enums, constants, arrow functions
-   - Tests both `.ts` and `.tsx` file parsing
+5. **Updated preload types** (`src/preload/index.d.ts`):
+   - Added `CallEdge` to type exports
+
+## Call Graph Implementation
+
+### How it works:
+
+1. ts-morph creates a Project and loads all source files
+2. For each function/method, we find all `CallExpression` nodes inside it
+3. For each call, we resolve the target using the TypeScript compiler's type checker
+4. If the callee is a function defined in our project (in the symbol map), we create a `CallEdge`
+5. Edges are returned as: `{ source: callerId, target: calleeId, callSite: { file, line } }`
+
+### Call Edge Data Structure:
+
+```typescript
+interface CallEdge {
+  id: string // "caller->callee"
+  source: string // Caller symbol ID (filePath:name)
+  target: string // Callee symbol ID (filePath:name)
+  callSite: {
+    file: string // Where the call happens
+    line: number // Line number of the call
+  }
+}
+```
+
+### Visual representation:
+
+- Call edges are rendered as React Flow edges in the Symbol zoom level
+- Styled with cyan color (#22d3ee) and arrow markers
+- Layout handled by ELK.js which considers edges for positioning
+
+## Testing Results
+
+Test run on `test-project/`:
+
+- **34 symbols** extracted from 6 files
+- **1 call edge** detected: `getApiClient() → createApiClient()`
+
+The test project mostly calls external APIs or methods on objects (which aren't tracked as project-level symbols), so only intra-project function calls are captured.
 
 ## Symbol Types Extracted
 
-| Symbol Kind | Tree-sitter Node Types                                   | Example                                  |
-| ----------- | -------------------------------------------------------- | ---------------------------------------- |
-| `function`  | `function_declaration`, arrow function in variable       | `function foo()`, `const foo = () => {}` |
-| `class`     | `class_declaration`                                      | `class Foo {}`                           |
-| `interface` | `interface_declaration`                                  | `interface IFoo {}`                      |
-| `type`      | `type_alias_declaration`                                 | `type Foo = {}`                          |
-| `enum`      | `enum_declaration`                                       | `enum Foo {}`                            |
-| `constant`  | `lexical_declaration` with `const`                       | `const FOO = 'bar'`                      |
-| `variable`  | `lexical_declaration` with `let`, `variable_declaration` | `let x = 1`                              |
+| Symbol Kind | ts-morph API                         | Example                                  |
+| ----------- | ------------------------------------ | ---------------------------------------- |
+| `function`  | `getFunctions()`, arrow functions    | `function foo()`, `const foo = () => {}` |
+| `class`     | `getClasses()`                       | `class Foo {}`                           |
+| `interface` | `getInterfaces()`                    | `interface IFoo {}`                      |
+| `type`      | `getTypeAliases()`                   | `type Foo = {}`                          |
+| `enum`      | `getEnums()`                         | `enum Foo {}`                            |
+| `constant`  | `getVariableStatements()` with const | `const FOO = 'bar'`                      |
+| `variable`  | `getVariableStatements()` with let   | `let x = 1`                              |
 
 ## Testing Instructions
 
-1. Start the development server:
+1. Run the test script:
 
    ```bash
-   npm run dev
+   npx tsx test-extractor.ts
    ```
 
-2. Open DevTools in the Electron window (F12)
+2. Or start the development server and navigate to Symbol zoom level:
+
+   ```bash
+   npm run dev -- ./test-project
+   ```
 
 3. In the console, test symbol extraction:
-
    ```javascript
-   // Scan the test project
-   const result = await window.api.scanDirectory('c:/Users/ts/projects/graph-editor/test-project')
-   console.log(result)
-
-   // Or set project path and scan
-   await window.api.setProjectPath('c:/Users/ts/projects/graph-editor/test-project')
    const result = await window.api.scanProject()
-   console.log(result)
+   console.log(result.callEdges) // See call graph edges
    ```
 
 ## Next Steps
 
-1. **Connect to GraphStore**: Transform extracted symbols into React Flow nodes for Construct/Symbol levels
-2. **File watching**: Implement file system watching for incremental updates
-3. **Symbol relationships**: Extract import/export relationships for edges
-4. **Performance**: Consider caching parsed ASTs for large projects
+1. **Expand call graph detection**: Track method calls on class instances
+2. **Import graph**: Show import/export relationships between modules
+3. **Cross-file resolution**: Better handling of re-exported symbols
+4. **Performance**: Consider caching ts-morph Project for incremental updates
 
 ## Active Decisions
 
-- **Top-level only**: Currently extracting only module-level symbols, not nested functions or class methods
-- **TSX support**: Using separate parser for `.tsx` files
-- **Error handling**: Files that fail to parse are logged but don't stop extraction
+- **ts-morph vs tree-sitter**: ts-morph chosen for semantic analysis capabilities (type resolution, call graph)
+- **Intra-project calls only**: Only track calls to functions defined within the project
+- **Deduplicated edges**: Same caller→callee pair only creates one edge
 
 ## Important Patterns
 
-### IPC Communication
+### ts-morph Project Setup
 
 ```typescript
-// Main process handler
-ipcMain.handle('project:scan', async (_, options) => {
-  return extractProjectSymbols(projectPath, options)
-})
-
-// Renderer usage
-const result = await window.api.scanProject()
+function createProject(projectRoot: string): Project {
+  const tsconfigPath = path.join(projectRoot, 'tsconfig.json')
+  try {
+    return new Project({
+      tsConfigFilePath: tsconfigPath,
+      skipAddingFilesFromTsConfig: true
+    })
+  } catch {
+    // Fallback to default settings if no tsconfig
+    return new Project({ compilerOptions: { ... } })
+  }
+}
 ```
 
-### Symbol Data Structure
+### Call Resolution
 
 ```typescript
-interface ExtractedSymbol {
-  id: string // "filepath:symbolname"
-  name: string // Symbol name
-  kind: SymbolKind // 'function' | 'class' | etc.
-  filePath: string // Relative path from project root
-  startLine: number // 1-indexed line number
-  endLine: number
-  exported: boolean // Is symbol exported?
+const symbol = expression.getSymbol()
+if (symbol) {
+  const declarations = symbol.getDeclarations()
+  // Get the file and name of where the function is defined
+  // Build edge if target is in our project
 }
 ```
