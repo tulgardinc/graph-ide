@@ -50,6 +50,11 @@ export interface FileSymbols {
 }
 
 /**
+ * Type of edge relationship
+ */
+export type EdgeType = 'call' | 'component-use'
+
+/**
  * A call relationship between two symbols
  */
 export interface CallEdge {
@@ -59,6 +64,8 @@ export interface CallEdge {
   source: string
   /** Callee symbol ID (filePath:name) */
   target: string
+  /** Type of relationship */
+  type: EdgeType
   /** Where the call happens */
   callSite: {
     file: string

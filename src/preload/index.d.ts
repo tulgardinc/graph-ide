@@ -42,5 +42,6 @@ export type {
   FileSymbols,
   SymbolKind,
   FileParseError,
-  CallEdge
+  CallEdge,
+  EdgeType
 } from '../main/types'

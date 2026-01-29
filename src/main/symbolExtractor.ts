@@ -8,7 +8,8 @@ import type {
   FileSymbols,
   ProjectSymbols,
   SymbolKind,
-  CallEdge
+  CallEdge,
+  EdgeType
 } from './types'
 
 // =============================================================================
@@ -433,9 +434,79 @@ function extractCallEdges(
         id: edgeId,
         source: caller.id,
         target: calleeId,
+        type: 'call',
         callSite: {
           file: relativePath,
           line: callLine
+        }
+      })
+    }
+
+    // Find JSX component uses: <ComponentName /> or <ComponentName>...</ComponentName>
+    const jsxElements = [
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement)
+    ]
+
+    for (const jsxElement of jsxElements) {
+      const jsxLine = jsxElement.getStartLineNumber()
+
+      // Find the containing function
+      const caller = findContainingFunctionByAncestors(jsxElement, projectRoot)
+      if (!caller) continue
+
+      // Get the tag name (component name)
+      const tagNameNode = jsxElement.getTagNameNode()
+      const tagName = tagNameNode.getText()
+
+      // Skip lowercase tags (HTML elements like div, span)
+      if (tagName[0] === tagName[0].toLowerCase()) continue
+
+      // Try to resolve the component
+      let componentFilePath: string | null = null
+      let componentName: string | null = tagName
+
+      try {
+        const symbol = tagNameNode.getSymbol()
+        if (symbol) {
+          const aliasedSymbol = symbol.getAliasedSymbol()
+          const symbolToUse = aliasedSymbol || symbol
+          const declarations = symbolToUse.getDeclarations()
+
+          if (declarations && declarations.length > 0) {
+            const decl = declarations[0]
+            componentFilePath = toRelativePath(decl.getSourceFile().getFilePath(), projectRoot)
+            componentName = symbolToUse.getName()
+          }
+        }
+      } catch {
+        // Can't resolve, use the tag name as-is
+        componentFilePath = relativePath
+      }
+
+      if (!componentFilePath) componentFilePath = relativePath
+      if (!componentName) continue
+
+      const componentId = `${componentFilePath}:${componentName}`
+
+      // Only create edge if component is in our symbol map
+      if (!symbolMap.has(componentId)) continue
+
+      // Skip self-references
+      if (caller.id === componentId) continue
+
+      const edgeId = `${caller.id}->${componentId}`
+      if (seenEdges.has(edgeId)) continue
+
+      seenEdges.add(edgeId)
+      edges.push({
+        id: edgeId,
+        source: caller.id,
+        target: componentId,
+        type: 'component-use',
+        callSite: {
+          file: relativePath,
+          line: jsxLine
         }
       })
     }

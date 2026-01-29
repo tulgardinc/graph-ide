@@ -1,311 +1,183 @@
-# Map IDE — System Patterns
+# System Patterns
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Electron Main Process                         │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │  File System    │  │  Project Store  │  │  MCP Server (future)    │  │
-│  │  Operations     │  │  (workspace)    │  │  (tool calling)         │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────────┘  │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ IPC Bridge (preload)
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│                          Electron Renderer Process                      │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                         React Application                         │   │
-│  │  ┌────────────────────────┐  ┌────────────────────────────────┐  │   │
-│  │  │      Graph Panel       │  │         Chat Panel             │  │   │
-│  │  │  ┌──────────────────┐  │  │  ┌──────────────────────────┐  │  │   │
-│  │  │  │   React Flow     │  │  │  │   Message List           │  │   │
-│  │  │  │   (canvas)       │  │  │  │   (scrollable)           │  │   │
-│  │  │  └──────────────────┘  │  │  └──────────────────────────┘  │  │   │
-│  │  │  ┌──────────────────┐  │  │  ┌──────────────────────────┐  │  │   │
-│  │  │  │   Zoom Controls  │  │  │  │   Input + Send           │  │   │
-│  │  │  │   (breadcrumb)   │  │  │  │   (composer)             │  │   │
-│  │  │  └──────────────────┘  │  │  └──────────────────────────┘  │  │   │
-│  │  └────────────────────────┘  └────────────────────────────────┘  │   │
-│  │  ┌────────────────────────────────────────────────────────────┐  │   │
-│  │  │                    Shared State (Zustand)                  │  │   │
-│  │  │  - Graph data (nodes, edges, zoom level)                   │  │   │
-│  │  │  - Selection state (scoped nodes)                          │  │   │
-│  │  │  - Chat state (messages, streaming)                        │  │   │
-│  │  │  - Project state (manifest, file tree)                     │  │   │
-│  │  └────────────────────────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     Electron Main Process                    │
+│  ┌─────────────────┐  ┌─────────────────┐                   │
+│  │  fileWalker.ts  │  │symbolExtractor.ts│                   │
+│  │  (find files)   │  │  (ts-morph AST)  │                   │
+│  └─────────────────┘  └─────────────────┘                   │
+└─────────────────────────────────────────────────────────────┘
+                              │ IPC
+┌─────────────────────────────────────────────────────────────┐
+│                    Electron Renderer Process                 │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐ │
+│  │  graphStore.ts  │  │  elkLayout.ts   │  │ GraphPanel  │ │
+│  │   (Zustand)     │  │  (ELK.js)       │  │(React Flow) │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘ │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Key Technical Decisions
+## Symbol Extraction (ts-morph)
 
-### 1. Electron + Vite + React
+### Why ts-morph over tree-sitter
 
-**Decision**: Use Electron with Vite for fast development and React for UI.
+- Full TypeScript type checking
+- Import resolution (follows aliases)
+- Cross-file symbol resolution
+- Type-aware analysis
 
-**Rationale**:
-
-- Electron provides file system access and native capabilities
-- Vite offers fast HMR and modern build tooling
-- React + TypeScript for type-safe, component-based UI
-
-### 2. React Flow for Graph Visualization
-
-**Decision**: Use React Flow as the graph rendering library.
-
-**Rationale**:
-
-- Built for React, great DX
-- Handles pan/zoom, selection, edges natively
-- Customizable nodes and edges
-- Active maintenance and community
-
-**Pattern**: Semantic zoom via canvas repopulation
+### Extraction Flow
 
 ```typescript
-// Instead of actual zoom, we switch what nodes/edges are displayed
-// 4 canvas zoom levels — code is viewed in a separate modal/popup, not on the canvas
-type ZoomLevel = 'system' | 'layer' | 'construct' | 'symbol'
-
-// When user "zooms in" to a node:
-// 1. Store current level in navigation stack
-// 2. Query graph data for the next level down
-// 3. Replace nodes/edges on the canvas
-// 4. Update breadcrumb navigation
-
-// When viewing code (from symbol level):
-// - Open code in a modal/popup overlay
-// - Code view is disjoint from the map canvas
-// - Maintains map context while editing
+extractProjectSymbols(projectRoot)
+  → walkDirectory()           // Find .ts/.tsx files
+  → createProject()           // ts-morph Project
+  → addSourceFileAtPath()     // Load all files for import resolution
+  → extractSymbolsFromSourceFile()  // Per-file symbol extraction
+  → extractCallEdges()        // Call graph generation
 ```
 
-### 3. Zustand for State Management
-
-**Decision**: Use Zustand for global state.
-
-**Rationale**:
-
-- Minimal boilerplate
-- Works well with React Flow
-- Easy to persist/hydrate
-- Good TypeScript support
-
-**Store Structure**:
+### Symbol Types
 
 ```typescript
-interface MapIDEStore {
-  // Graph state
-  zoomLevel: ZoomLevel
-  currentScope: string[] // IDs of ancestor nodes
-  nodes: Node[]
-  edges: Edge[]
-  selectedNodeIds: Set<string>
-
-  // Chat state
-  messages: ChatMessage[]
-  isStreaming: boolean
-
-  // Project state
-  projectPath: string | null
-  manifest: ProjectManifest | null
-
-  // Actions
-  zoomInto: (nodeId: string) => void
-  zoomOut: () => void
-  selectNodes: (nodeIds: string[]) => void
-  sendMessage: (content: string) => void
-}
+type SymbolKind =
+  | 'function' // function declarations + arrow functions
+  | 'class' // class declarations
+  | 'interface' // interface declarations
+  | 'type' // type aliases
+  | 'enum' // enum declarations
+  | 'constant' // const declarations
+  | 'variable' // let/var declarations
+  | 'object' // object literal constants
 ```
 
-### 4. Tree-sitter WASM for Symbol Extraction
+## Call Graph Algorithm
 
-**Decision**: Use tree-sitter compiled to WebAssembly for parsing TypeScript.
-
-**Rationale**:
-
-- Fast incremental parsing
-- Works in browser/Electron renderer
-- Language-agnostic architecture (future expansion)
-- Concrete syntax tree access
-
-**Future Enhancement**: TypeScript compiler API via ts-morph for:
-
-- Type resolution
-- Import graph with full module resolution
-- Semantic analysis beyond syntax
-
-### 5. TypeScript Config Files for Manifest
-
-**Decision**: Use `.ts` files for project manifest configuration.
-
-**Rationale**:
-
-- Type-safe configuration
-- IDE autocompletion
-- Can include computed values
-- Familiar to TypeScript developers
-
-**Example**:
+### O(n) Complexity with getAncestors()
 
 ```typescript
-// map-ide.config.ts
-import { defineConfig } from 'map-ide'
+function extractCallEdges(project, symbolMap, projectRoot) {
+  for (sourceFile of project.getSourceFiles()) {
+    // Find all call expressions - O(n)
+    callExpressions = sourceFile.getDescendantsOfKind(CallExpression)
 
-export default defineConfig({
-  systems: [
-    {
-      name: 'web',
-      root: './packages/web',
-      layers: ['ui', 'state', 'domain', 'shared']
-    },
-    {
-      name: 'server',
-      root: './packages/server',
-      layers: ['handlers', 'domain', 'data', 'shared']
+    for (callExpr of callExpressions) {
+      // Find caller using getAncestors() - O(depth)
+      caller = findContainingFunctionByAncestors(callExpr)
+
+      // Resolve callee through imports
+      symbol = expression.getSymbol()
+      aliasedSymbol = symbol.getAliasedSymbol() // Follow imports
+
+      // Create edge if both exist in symbolMap
+      edges.push({ source: caller.id, target: callee.id, type: 'call' })
     }
-  ],
-  constraints: {
-    ui: ['state', 'shared'],
-    state: ['domain', 'shared'],
-    domain: ['shared'],
-    handlers: ['domain', 'data', 'shared'],
-    data: ['shared']
+
+    // JSX component detection
+    jsxElements = [
+      ...getDescendantsOfKind(JsxOpeningElement),
+      ...getDescendantsOfKind(JsxSelfClosingElement)
+    ]
+
+    for (jsx of jsxElements) {
+      // Skip HTML elements (lowercase)
+      if (tagName[0] === tagName[0].toLowerCase()) continue
+
+      edges.push({ source: caller.id, target: component.id, type: 'component-use' })
+    }
   }
-})
-```
-
-### 6. LLM Integration via API
-
-**Decision**: Direct API calls to LLM providers (initially configurable).
-
-**Rationale**:
-
-- Simpler than running local models
-- Can switch providers easily
-- Streaming support for responsiveness
-
-**Pattern**:
-
-```typescript
-interface LLMProvider {
-  chat(params: {
-    messages: Message[]
-    context: ScopedContext // derived from selected nodes
-    stream: boolean
-  }): AsyncIterable<string> | Promise<string>
 }
 ```
 
-### 7. MCP for Tool Calling (Future)
-
-**Decision**: Use Model Context Protocol for file operations.
-
-**Rationale**:
-
-- Standard protocol for LLM tool use
-- Can expose file read/write/create as tools
-- Enables agent-style workflows
-- Scope constraints map naturally to tool permissions
-
-## Component Patterns
-
-### Graph Node Components
+### Edge Types
 
 ```typescript
-// Custom node types for the 4 canvas zoom levels
-const nodeTypes = {
-  system: SystemNode, // Large card with icon
-  layer: LayerNode, // Colored band
-  construct: ConstructNode, // Medium card
-  symbol: SymbolNode // Compact item — double-click opens code modal
-}
+type EdgeType = 'call' | 'component-use'
 
-// Code viewing is handled separately via modal/popup overlay
-// Not a canvas node type — keeps map context visible while editing code
-```
-
-### Selection → Scope → Context
-
-```typescript
-// Selection drives everything
-function useSelectionContext() {
-  const selectedIds = useStore((s) => s.selectedNodeIds)
-  const nodes = useStore((s) => s.nodes)
-
-  // Derive what the LLM can see
-  const scopedContext = useMemo(() => {
-    const selected = nodes.filter((n) => selectedIds.has(n.id))
-    return buildContextFromNodes(selected)
-  }, [selectedIds, nodes])
-
-  return scopedContext
-}
-```
-
-### Chat Message Threading
-
-```typescript
-interface ChatMessage {
+interface CallEdge {
   id: string
-  role: 'user' | 'assistant'
-  content: string
-  // Evidence linking
-  references?: {
-    nodeIds: string[]
-    files?: { path: string; lines?: [number, number] }[]
-  }
-  // For invalidation
-  contextFingerprint?: string
+  source: string // Caller symbol ID
+  target: string // Callee symbol ID
+  type: EdgeType
+  callSite: { file: string; line: number }
 }
 ```
 
-## File Organization
+## Graph Store Pattern (Zustand)
 
-```
-src/
-├── main/                    # Electron main process
-│   ├── index.ts
-│   ├── ipc/                 # IPC handlers
-│   └── services/            # File system, project loading
-├── preload/                 # Preload scripts (IPC bridge)
-├── renderer/
-│   └── src/
-│       ├── App.tsx
-│       ├── main.tsx
-│       ├── components/
-│       │   ├── graph/       # React Flow components
-│       │   │   ├── GraphPanel.tsx
-│       │   │   ├── nodes/   # Custom node types
-│       │   │   └── edges/   # Custom edge types
-│       │   ├── chat/        # Chat UI components
-│       │   │   ├── ChatPanel.tsx
-│       │   │   ├── MessageList.tsx
-│       │   │   └── Composer.tsx
-│       │   └── ui/          # shadcn/ui components
-│       ├── store/           # Zustand stores
-│       │   ├── index.ts
-│       │   ├── graphSlice.ts
-│       │   └── chatSlice.ts
-│       ├── lib/             # Utilities
-│       │   ├── llm/         # LLM client
-│       │   └── parser/      # Tree-sitter integration
-│       └── types/           # TypeScript types
+### Multi-Level Graph State
+
+```typescript
+interface GraphState {
+  zoomLevel: 'system' | 'layer' | 'construct' | 'symbol'
+  nodesByLevel: Record<ZoomLevel, Node[]>
+  edgesByLevel: Record<ZoomLevel, Edge[]>
+  layoutedLevels: Set<ZoomLevel> // Track which levels have layout
+}
 ```
 
-## Data Flow
+### Lazy Symbol Loading
 
+```typescript
+setZoomLevel: (level) => {
+  set({ zoomLevel: level })
+  if (level === 'symbol') {
+    get().loadSymbols() // Trigger symbol extraction
+  }
+}
 ```
-User Action                    State Change                  UI Update
-─────────────────────────────────────────────────────────────────────────
-Click node          →  selectedNodeIds.add(id)      →  Node highlights
-                                                       Chat context updates
 
-Double-click node   →  zoomInto(nodeId)             →  Canvas repopulates
-                       currentScope.push(nodeId)       Breadcrumb updates
-                       nodes = fetchChildNodes()
+### Edge Validation
 
-Send message        →  messages.push(userMsg)       →  Message appears
-                       isStreaming = true              Streaming indicator
-                       ...LLM response streams...      Assistant message grows
-                       isStreaming = false             Complete
+```typescript
+// Filter out edges referencing non-existent nodes
+const validCallEdges = callEdges.filter(
+  (edge) => validNodeIds.has(edge.source) && validNodeIds.has(edge.target)
+)
 ```
+
+## ELK Layout Integration
+
+### Layout Options by Zoom Level
+
+```typescript
+const LAYOUT_OPTIONS: Record<ZoomLevel, ElkLayoutOptions> = {
+  system: { direction: 'RIGHT', nodeSpacing: 80, layerSpacing: 120 },
+  layer: { direction: 'DOWN', nodeSpacing: 40, layerSpacing: 80 },
+  construct: { direction: 'DOWN', nodeSpacing: 50, layerSpacing: 100 },
+  symbol: { direction: 'DOWN', nodeSpacing: 20, layerSpacing: 40 }
+}
+```
+
+### Layout Before Store Update
+
+```typescript
+// Compute layout BEFORE updating store
+const layoutResult = await getLayoutedElements(nodes, edges, options)
+set({ nodesByLevel: { ...state, symbol: layoutResult.nodes } })
+```
+
+## Visual Styling
+
+### Node Colors by Symbol Kind
+
+| Kind      | Background | Border Color |
+| --------- | ---------- | ------------ |
+| function  | #0f172a    | #14b8a6      |
+| class     | #1e1b4b    | #8b5cf6      |
+| interface | #172554    | #3b82f6      |
+| type      | #1e1b4b    | #8b5cf6      |
+| enum      | #422006    | #d97706      |
+| constant  | #14532d    | #10b981      |
+| variable  | #1c1917    | #525252      |
+| object    | #1e293b    | #475569      |
+
+### Edge Styling
+
+| Type          | Color   | Width |
+| ------------- | ------- | ----- |
+| call          | #22d3ee | 1.5px |
+| component-use | #f472b6 | 2px   |

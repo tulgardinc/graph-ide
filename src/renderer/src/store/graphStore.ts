@@ -139,28 +139,37 @@ function symbolsToNodes(symbols: ExtractedSymbol[]): Node[] {
 
 /**
  * Convert call edges to React Flow edges with call graph styling
+ * - Function calls: Cyan (#22d3ee)
+ * - Component uses: Pink/Magenta (#f472b6)
  */
 function callEdgesToFlowEdges(callEdges: CallEdge[]): Edge[] {
-  return callEdges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    type: 'default',
-    animated: false,
-    style: {
-      stroke: '#22d3ee', // Cyan color for call edges
-      strokeWidth: 1.5
-    },
-    markerEnd: {
-      type: 'arrowclosed' as const,
-      color: '#22d3ee',
-      width: 12,
-      height: 12
-    },
-    data: {
-      callSite: edge.callSite
+  return callEdges.map((edge) => {
+    // Different colors for different edge types
+    const isComponentUse = edge.type === 'component-use'
+    const strokeColor = isComponentUse ? '#f472b6' : '#22d3ee' // Pink for components, Cyan for calls
+
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'default',
+      animated: false,
+      style: {
+        stroke: strokeColor,
+        strokeWidth: isComponentUse ? 2 : 1.5
+      },
+      markerEnd: {
+        type: 'arrowclosed' as const,
+        color: strokeColor,
+        width: 12,
+        height: 12
+      },
+      data: {
+        callSite: edge.callSite,
+        edgeType: edge.type
+      }
     }
-  }))
+  })
 }
 
 // =============================================================================
