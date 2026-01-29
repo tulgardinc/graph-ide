@@ -1,17 +1,22 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, useEffect } from 'react'
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
-  Controls,
+  useReactFlow,
   type OnSelectionChangeParams,
   type Node
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
-import { useGraphStore } from '../../store/graphStore'
+import { useGraphStore, useCurrentNodes, useCurrentEdges } from '../../store/graphStore'
+import { ZoomLevelIndicator } from './ZoomLevelIndicator'
 
-export function GraphPanel(): React.JSX.Element {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useGraphStore()
+function GraphCanvas(): React.JSX.Element {
+  const nodes = useCurrentNodes()
+  const edges = useCurrentEdges()
+  const { onNodesChange, onEdgesChange, onConnect, zoomLevel, layoutCurrentLevel } = useGraphStore()
+  const { fitView } = useReactFlow()
 
   // Track selected nodes for the info panel
   const [selectedNodes, setSelectedNodes] = useState<Node[]>([])
@@ -20,8 +25,25 @@ export function GraphPanel(): React.JSX.Element {
     setSelectedNodes(params.nodes)
   }, [])
 
+  // Layout nodes when zoom level changes OR when nodes are loaded (e.g., from async symbol loading)
+  useEffect(() => {
+    const doLayout = async (): Promise<void> => {
+      // Only layout if we have nodes to layout
+      if (nodes.length === 0) {
+        return
+      }
+
+      await layoutCurrentLevel()
+      // Small delay to ensure nodes are rendered before fitting
+      setTimeout(() => {
+        fitView({ padding: 0.2, duration: 300 })
+      }, 50)
+    }
+    doLayout()
+  }, [zoomLevel, nodes.length, layoutCurrentLevel, fitView])
+
   return (
-    <div className="h-full w-full">
+    <>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -31,19 +53,21 @@ export function GraphPanel(): React.JSX.Element {
         onSelectionChange={onSelectionChange}
         // Selection configuration:
         // - Click = select single node (default behavior)
-        // - Shift+Click = multi-select (multiSelectionKeyCode)
-        // - Shift+Drag = draw selection box (selectionKeyCode)
+        // - Shift+Click = add to multi-selection (multiSelectionKeyCode)
+        // - Selection box disabled (selectionKeyCode=null)
         multiSelectionKeyCode="Shift"
-        selectionKeyCode="Shift"
+        selectionKeyCode={null}
         selectNodesOnDrag={false}
+        colorMode="dark"
         fitView
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
-        style={{ background: '#030712' }}
       >
         <Background color="#1e293b" gap={20} size={1} />
-        <Controls className="[&>button]:!bg-slate-800 [&>button]:!border-slate-700 [&>button]:!text-slate-300 [&>button:hover]:!bg-slate-700" />
       </ReactFlow>
+
+      {/* Zoom level indicator */}
+      <ZoomLevelIndicator />
 
       {/* Selection info panel */}
       {selectedNodes.length > 0 && (
@@ -63,6 +87,16 @@ export function GraphPanel(): React.JSX.Element {
           </div>
         </div>
       )}
+    </>
+  )
+}
+
+export function GraphPanel(): React.JSX.Element {
+  return (
+    <div className="h-full w-full">
+      <ReactFlowProvider>
+        <GraphCanvas />
+      </ReactFlowProvider>
     </div>
   )
 }

@@ -64,13 +64,19 @@
 
 ```typescript
 // Instead of actual zoom, we switch what nodes/edges are displayed
-type ZoomLevel = 'system' | 'layer' | 'construct' | 'symbol' | 'code'
+// 4 canvas zoom levels — code is viewed in a separate modal/popup, not on the canvas
+type ZoomLevel = 'system' | 'layer' | 'construct' | 'symbol'
 
 // When user "zooms in" to a node:
 // 1. Store current level in navigation stack
 // 2. Query graph data for the next level down
 // 3. Replace nodes/edges on the canvas
 // 4. Update breadcrumb navigation
+
+// When viewing code (from symbol level):
+// - Open code in a modal/popup overlay
+// - Code view is disjoint from the map canvas
+// - Maintains map context while editing
 ```
 
 ### 3. Zustand for State Management
@@ -206,14 +212,16 @@ interface LLMProvider {
 ### Graph Node Components
 
 ```typescript
-// Custom node types per zoom level
+// Custom node types for the 4 canvas zoom levels
 const nodeTypes = {
   system: SystemNode, // Large card with icon
   layer: LayerNode, // Colored band
   construct: ConstructNode, // Medium card
-  symbol: SymbolNode, // Compact item
-  code: CodeNode // Syntax-highlighted block
+  symbol: SymbolNode // Compact item — double-click opens code modal
 }
+
+// Code viewing is handled separately via modal/popup overlay
+// Not a canvas node type — keeps map context visible while editing code
 ```
 
 ### Selection → Scope → Context

@@ -1,8 +1,47 @@
 @import 'tailwindcss';
 
+/* React Flow custom styling */
+.react-flow {
+  --xy-node-boxshadow-selected-default: 0 0 0 2px #22d3ee, 0 0 16px rgba(34, 211, 238, 0.3);
+  --xy-edge-stroke-selected-default: #22d3ee;
+  --xy-background-color-default: #030712;
+}
+
+.react-flow__node.selected {
+  box-shadow:
+    0 0 0 2px #22d3ee,
+    0 0 16px rgba(34, 211, 238, 0.3) !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #22d3ee !important;
+  stroke-width: 2 !important;
+}
+
 @layer base {
   :root {
     color-scheme: dark;
+    /* shadcn/ui dark theme with slate + cyan accent */
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 187 92% 53%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 187 92% 53%;
+    --radius: 0.5rem;
   }
 
   body {

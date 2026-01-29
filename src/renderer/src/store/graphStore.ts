@@ -9,15 +9,139 @@ import {
   applyEdgeChanges,
   addEdge
 } from '@xyflow/react'
+import { getLayoutedElements, type ElkLayoutOptions } from '../lib/elkLayout'
+import type { ProjectSymbols, ExtractedSymbol, SymbolKind } from '../../../preload/index.d'
 
-// Demo nodes representing a simple system architecture
-const initialNodes: Node[] = [
-  // System level nodes
-  {
-    id: 'web',
+// =============================================================================
+// TYPES
+// =============================================================================
+
+export type ZoomLevel = 'system' | 'layer' | 'construct' | 'symbol'
+
+export const ZOOM_LEVELS: ZoomLevel[] = ['system', 'layer', 'construct', 'symbol']
+
+export const ZOOM_LEVEL_LABELS: Record<ZoomLevel, string> = {
+  system: 'System',
+  layer: 'Layer',
+  construct: 'Construct',
+  symbol: 'Symbol'
+}
+
+// Layout options per zoom level
+const LAYOUT_OPTIONS: Record<ZoomLevel, ElkLayoutOptions> = {
+  system: { direction: 'RIGHT', nodeSpacing: 80, layerSpacing: 120 },
+  layer: { direction: 'DOWN', nodeSpacing: 40, layerSpacing: 80 },
+  construct: { direction: 'DOWN', nodeSpacing: 50, layerSpacing: 100 },
+  symbol: { direction: 'DOWN', nodeSpacing: 20, layerSpacing: 40 }
+}
+
+// =============================================================================
+// SYMBOL TO NODE CONVERSION
+// =============================================================================
+
+/**
+ * Get visual styling for a symbol based on its kind
+ */
+function getSymbolStyle(kind: SymbolKind, exported: boolean): React.CSSProperties {
+  const baseStyle: React.CSSProperties = {
+    borderRadius: '6px',
+    padding: '8px 12px',
+    fontFamily: 'monospace',
+    fontSize: '12px'
+  }
+
+  const kindStyles: Record<SymbolKind, React.CSSProperties> = {
+    function: {
+      background: '#0f172a',
+      color: '#5eead4',
+      border: exported ? '2px solid #14b8a6' : '1px solid #14b8a6'
+    },
+    class: {
+      background: '#1e1b4b',
+      color: '#a5b4fc',
+      border: exported ? '2px solid #8b5cf6' : '1px solid #8b5cf6'
+    },
+    interface: {
+      background: '#172554',
+      color: '#93c5fd',
+      border: exported ? '2px dashed #3b82f6' : '1px dashed #3b82f6'
+    },
+    type: {
+      background: '#1e1b4b',
+      color: '#c4b5fd',
+      border: exported ? '2px dashed #8b5cf6' : '1px dashed #8b5cf6'
+    },
+    enum: {
+      background: '#422006',
+      color: '#fbbf24',
+      border: exported ? '2px solid #d97706' : '1px solid #d97706'
+    },
+    constant: {
+      background: '#14532d',
+      color: '#86efac',
+      border: exported ? '2px solid #10b981' : '1px solid #10b981'
+    },
+    variable: {
+      background: '#1c1917',
+      color: '#a1a1aa',
+      border: exported ? '2px solid #525252' : '1px solid #525252'
+    },
+    object: {
+      background: '#1e293b',
+      color: '#f1f5f9',
+      border: exported ? '2px solid #475569' : '1px solid #475569'
+    }
+  }
+
+  return { ...baseStyle, ...kindStyles[kind] }
+}
+
+/**
+ * Get icon/prefix for a symbol kind
+ */
+function getSymbolPrefix(kind: SymbolKind): string {
+  const prefixes: Record<SymbolKind, string> = {
+    function: 'ƒ',
+    class: '◆',
+    interface: '◇',
+    type: '⊤',
+    enum: '⊞',
+    constant: '●',
+    variable: '○',
+    object: '▣'
+  }
+  return prefixes[kind]
+}
+
+/**
+ * Convert extracted symbols to React Flow nodes
+ */
+function symbolsToNodes(symbols: ExtractedSymbol[]): Node[] {
+  return symbols.map((symbol) => ({
+    id: symbol.id,
     type: 'default',
-    position: { x: 100, y: 50 },
-    data: { label: '🌐 Web App' },
+    position: { x: 0, y: 0 }, // Will be computed by ELK
+    data: {
+      label: `${getSymbolPrefix(symbol.kind)} ${symbol.name}`,
+      symbol // Store the full symbol data for later use
+    },
+    style: {
+      ...getSymbolStyle(symbol.kind, symbol.exported),
+      width: Math.max(120, symbol.name.length * 8 + 40)
+    }
+  }))
+}
+
+// =============================================================================
+// DEMO DATA - SYSTEM LEVEL (Web Frontend → Backend → Database)
+// =============================================================================
+
+const systemNodes: Node[] = [
+  {
+    id: 'frontend',
+    type: 'default',
+    position: { x: 0, y: 0 }, // Will be computed by ELK
+    data: { label: '🌐 Frontend' },
     style: {
       background: '#1e293b',
       color: '#f1f5f9',
@@ -29,10 +153,10 @@ const initialNodes: Node[] = [
     }
   },
   {
-    id: 'server',
+    id: 'backend',
     type: 'default',
-    position: { x: 350, y: 50 },
-    data: { label: '⚙️ Server' },
+    position: { x: 0, y: 0 },
+    data: { label: '⚙️ Backend' },
     style: {
       background: '#1e293b',
       color: '#f1f5f9',
@@ -46,219 +170,565 @@ const initialNodes: Node[] = [
   {
     id: 'database',
     type: 'default',
-    position: { x: 600, y: 50 },
+    position: { x: 0, y: 0 },
     data: { label: '🗄️ Database' },
     style: {
-      background: '#1e293b',
-      color: '#f1f5f9',
-      border: '2px solid #f59e0b',
+      background: '#1e1b4b',
+      color: '#c4b5fd',
+      border: '2px dashed #f59e0b',
       borderRadius: '12px',
       padding: '16px',
       fontWeight: 600,
       width: 140
     }
-  },
-  // Layer nodes for Web App
-  {
-    id: 'ui-layer',
-    type: 'default',
-    position: { x: 50, y: 180 },
-    data: { label: '🎨 UI Layer' },
-    style: {
-      background: '#0f172a',
-      color: '#94a3b8',
-      border: '1px solid #334155',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 120
-    }
-  },
-  {
-    id: 'state-layer',
-    type: 'default',
-    position: { x: 50, y: 280 },
-    data: { label: '📦 State Layer' },
-    style: {
-      background: '#0f172a',
-      color: '#94a3b8',
-      border: '1px solid #334155',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 120
-    }
-  },
-  // Layer nodes for Server
-  {
-    id: 'handlers-layer',
-    type: 'default',
-    position: { x: 300, y: 180 },
-    data: { label: '🔌 Handlers' },
-    style: {
-      background: '#0f172a',
-      color: '#94a3b8',
-      border: '1px solid #334155',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 120
-    }
-  },
-  {
-    id: 'domain-layer',
-    type: 'default',
-    position: { x: 300, y: 280 },
-    data: { label: '🧠 Domain' },
-    style: {
-      background: '#0f172a',
-      color: '#94a3b8',
-      border: '1px solid #334155',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 120
-    }
-  },
-  {
-    id: 'data-layer',
-    type: 'default',
-    position: { x: 300, y: 380 },
-    data: { label: '💾 Data Layer' },
-    style: {
-      background: '#0f172a',
-      color: '#94a3b8',
-      border: '1px solid #334155',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 120
-    }
-  },
-  // External service
-  {
-    id: 'auth-provider',
-    type: 'default',
-    position: { x: 550, y: 280 },
-    data: { label: '🔐 Auth Provider' },
-    style: {
-      background: '#1e1b4b',
-      color: '#c4b5fd',
-      border: '1px dashed #6366f1',
-      borderRadius: '8px',
-      padding: '12px',
-      fontSize: '13px',
-      width: 130
-    }
   }
 ]
 
-const initialEdges: Edge[] = [
-  // System connections
+const systemEdges: Edge[] = [
   {
-    id: 'web-server',
-    source: 'web',
-    target: 'server',
+    id: 'frontend-backend',
+    source: 'frontend',
+    target: 'backend',
+    type: 'default',
     animated: true,
-    style: { stroke: '#3b82f6', strokeWidth: 2 },
-    label: 'HTTP',
+    style: { stroke: '#3b82f6', strokeWidth: 2, strokeDasharray: '8,4' },
+    markerEnd: { type: 'arrowclosed', color: '#3b82f6', width: 16, height: 16 },
+    markerStart: { type: 'arrowclosed', color: '#3b82f6', width: 16, height: 16 },
+    label: 'REST',
     labelStyle: { fill: '#94a3b8', fontSize: 11 },
     labelBgStyle: { fill: '#0f172a' }
   },
   {
-    id: 'server-db',
-    source: 'server',
+    id: 'backend-database',
+    source: 'backend',
     target: 'database',
+    type: 'default',
     animated: true,
-    style: { stroke: '#10b981', strokeWidth: 2 },
+    style: { stroke: '#10b981', strokeWidth: 2, strokeDasharray: '8,4' },
+    markerEnd: { type: 'arrowclosed', color: '#10b981', width: 16, height: 16 },
     label: 'SQL',
     labelStyle: { fill: '#94a3b8', fontSize: 11 },
     labelBgStyle: { fill: '#0f172a' }
-  },
-  // Web App layers
-  {
-    id: 'web-ui',
-    source: 'web',
-    target: 'ui-layer',
-    style: { stroke: '#475569', strokeWidth: 1 }
-  },
-  {
-    id: 'ui-state',
-    source: 'ui-layer',
-    target: 'state-layer',
-    style: { stroke: '#475569', strokeWidth: 1 }
-  },
-  // Server layers
-  {
-    id: 'server-handlers',
-    source: 'server',
-    target: 'handlers-layer',
-    style: { stroke: '#475569', strokeWidth: 1 }
-  },
-  {
-    id: 'handlers-domain',
-    source: 'handlers-layer',
-    target: 'domain-layer',
-    style: { stroke: '#475569', strokeWidth: 1 }
-  },
-  {
-    id: 'domain-data',
-    source: 'domain-layer',
-    target: 'data-layer',
-    style: { stroke: '#475569', strokeWidth: 1 }
-  },
-  // External connections
-  {
-    id: 'server-auth',
-    source: 'server',
-    target: 'auth-provider',
-    style: { stroke: '#6366f1', strokeWidth: 1, strokeDasharray: '5,5' },
-    label: 'OAuth',
-    labelStyle: { fill: '#94a3b8', fontSize: 11 },
-    labelBgStyle: { fill: '#0f172a' }
-  },
-  {
-    id: 'data-db',
-    source: 'data-layer',
-    target: 'database',
-    style: { stroke: '#f59e0b', strokeWidth: 1 }
   }
 ]
 
+// =============================================================================
+// DEMO DATA - LAYER LEVEL (Architectural layers across Frontend & Backend)
+// =============================================================================
+
+const layerNodes: Node[] = [
+  // Frontend layers (blue)
+  {
+    id: 'components',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🎨 Components' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'state',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '📦 State' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'api-client',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🔌 API Client' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  // Backend layers (green)
+  {
+    id: 'routes',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🛣️ Routes' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'services',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🧠 Services' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'repositories',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '💾 Repositories' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '10px',
+      padding: '14px',
+      fontWeight: 500,
+      width: 140
+    }
+  }
+]
+
+const layerEdges: Edge[] = [
+  // Frontend flow: Components → State → API Client
+  {
+    id: 'components-state',
+    source: 'components',
+    target: 'state',
+    style: { stroke: '#3b82f6', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#3b82f6', width: 12, height: 12 }
+  },
+  {
+    id: 'state-api',
+    source: 'state',
+    target: 'api-client',
+    style: { stroke: '#3b82f6', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#3b82f6', width: 12, height: 12 }
+  },
+  // Frontend → Backend communication
+  {
+    id: 'api-routes',
+    source: 'api-client',
+    target: 'routes',
+    animated: true,
+    style: { stroke: '#8b5cf6', strokeWidth: 2, strokeDasharray: '8,4' },
+    markerEnd: { type: 'arrowclosed', color: '#8b5cf6', width: 14, height: 14 },
+    markerStart: { type: 'arrowclosed', color: '#8b5cf6', width: 14, height: 14 },
+    label: 'HTTP',
+    labelStyle: { fill: '#94a3b8', fontSize: 10 },
+    labelBgStyle: { fill: '#0f172a' }
+  },
+  // Backend flow: Routes → Services → Repositories
+  {
+    id: 'routes-services',
+    source: 'routes',
+    target: 'services',
+    style: { stroke: '#10b981', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#10b981', width: 12, height: 12 }
+  },
+  {
+    id: 'services-repos',
+    source: 'services',
+    target: 'repositories',
+    style: { stroke: '#10b981', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#10b981', width: 12, height: 12 }
+  }
+]
+
+// =============================================================================
+// DEMO DATA - CONSTRUCT LEVEL (Specific modules/classes/files)
+// =============================================================================
+
+const constructNodes: Node[] = [
+  // Frontend constructs (blue)
+  {
+    id: 'user-list',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🎨 User List' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'user-store',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '📦 User Store' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'api-client-construct',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🔌 API Client' },
+    style: {
+      background: '#1e3a5f',
+      color: '#93c5fd',
+      border: '2px solid #3b82f6',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  // Backend constructs (green)
+  {
+    id: 'user-routes',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🛣️ User Routes' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 130
+    }
+  },
+  {
+    id: 'user-service',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '🧠 User Service' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 135
+    }
+  },
+  {
+    id: 'user-repository',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '💾 User Repository' },
+    style: {
+      background: '#14532d',
+      color: '#86efac',
+      border: '2px solid #10b981',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 160
+    }
+  },
+  // Shared type (purple)
+  {
+    id: 'user-type',
+    type: 'default',
+    position: { x: 0, y: 0 },
+    data: { label: '📝 User' },
+    style: {
+      background: '#1e1b4b',
+      color: '#a5b4fc',
+      border: '2px solid #8b5cf6',
+      borderRadius: '8px',
+      padding: '12px',
+      fontWeight: 500,
+      width: 100
+    }
+  }
+]
+
+const constructEdges: Edge[] = [
+  // Frontend flow
+  {
+    id: 'userlist-store',
+    source: 'user-list',
+    target: 'user-store',
+    style: { stroke: '#3b82f6', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#3b82f6', width: 12, height: 12 }
+  },
+  {
+    id: 'store-apiclient',
+    source: 'user-store',
+    target: 'api-client-construct',
+    style: { stroke: '#3b82f6', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#3b82f6', width: 12, height: 12 }
+  },
+  // Frontend → Backend
+  {
+    id: 'apiclient-routes',
+    source: 'api-client-construct',
+    target: 'user-routes',
+    animated: true,
+    style: { stroke: '#8b5cf6', strokeWidth: 2, strokeDasharray: '6,3' },
+    markerEnd: { type: 'arrowclosed', color: '#8b5cf6', width: 12, height: 12 },
+    markerStart: { type: 'arrowclosed', color: '#8b5cf6', width: 12, height: 12 }
+  },
+  // Backend flow
+  {
+    id: 'routes-service',
+    source: 'user-routes',
+    target: 'user-service',
+    style: { stroke: '#10b981', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#10b981', width: 12, height: 12 }
+  },
+  {
+    id: 'service-repo',
+    source: 'user-service',
+    target: 'user-repository',
+    style: { stroke: '#10b981', strokeWidth: 1.5 },
+    markerEnd: { type: 'arrowclosed', color: '#10b981', width: 12, height: 12 }
+  },
+  // Type dependencies (dashed)
+  {
+    id: 'store-type',
+    source: 'user-store',
+    target: 'user-type',
+    style: { stroke: '#8b5cf6', strokeWidth: 1, strokeDasharray: '4,2' },
+    markerEnd: { type: 'arrowclosed', color: '#8b5cf6', width: 10, height: 10 }
+  },
+  {
+    id: 'service-type',
+    source: 'user-service',
+    target: 'user-type',
+    style: { stroke: '#8b5cf6', strokeWidth: 1, strokeDasharray: '4,2' },
+    markerEnd: { type: 'arrowclosed', color: '#8b5cf6', width: 10, height: 10 }
+  }
+]
+
+// Symbol level data is now loaded dynamically from tree-sitter via loadSymbols()
+
+// =============================================================================
+// STORE
+// =============================================================================
+
 interface GraphState {
-  nodes: Node[]
-  edges: Edge[]
+  // Zoom level
+  zoomLevel: ZoomLevel
+
+  // Nodes and edges per zoom level
+  nodesByLevel: Record<ZoomLevel, Node[]>
+  edgesByLevel: Record<ZoomLevel, Edge[]>
+
+  // Track which levels have been laid out
+  layoutedLevels: Set<ZoomLevel>
+
+  // Project symbols from tree-sitter
+  projectSymbols: ProjectSymbols | null
+  symbolsLoading: boolean
+  symbolsError: string | null
+
+  // React Flow handlers
   onNodesChange: OnNodesChange
   onEdgesChange: OnEdgesChange
   onConnect: OnConnect
-  // Derived state helper
-  getSelectedNodes: () => Node[]
+
+  // Actions
+  setZoomLevel: (level: ZoomLevel) => void
+  layoutCurrentLevel: () => Promise<void>
+  loadSymbols: () => Promise<void>
 }
 
 export const useGraphStore = create<GraphState>((set, get) => ({
-  nodes: initialNodes,
-  edges: initialEdges,
+  zoomLevel: 'system',
+
+  nodesByLevel: {
+    system: systemNodes,
+    layer: layerNodes,
+    construct: constructNodes,
+    symbol: [] // Start empty, will be populated from tree-sitter
+  },
+
+  edgesByLevel: {
+    system: systemEdges,
+    layer: layerEdges,
+    construct: constructEdges,
+    symbol: [] // No edges for symbols initially
+  },
+
+  layoutedLevels: new Set<ZoomLevel>(),
+
+  projectSymbols: null,
+  symbolsLoading: false,
+  symbolsError: null,
+
+  setZoomLevel: (level) => {
+    set({ zoomLevel: level })
+
+    // Trigger symbol loading when switching to symbol level
+    if (level === 'symbol') {
+      get().loadSymbols()
+    }
+  },
+
+  loadSymbols: async () => {
+    const { projectSymbols, symbolsLoading, nodesByLevel, layoutedLevels } = get()
+
+    console.log('[GraphStore] loadSymbols called', {
+      symbolsLoading,
+      hasProjectSymbols: projectSymbols !== null
+    })
+
+    // Skip if already loading or already have symbols
+    if (symbolsLoading || projectSymbols !== null) {
+      console.log('[GraphStore] Skipping - already loading or have symbols')
+      return
+    }
+
+    set({ symbolsLoading: true, symbolsError: null })
+
+    try {
+      // Get project path from main process
+      console.log('[GraphStore] Getting project path...')
+      const projectPath = await window.api.getProjectPath()
+      console.log('[GraphStore] Project path:', projectPath)
+
+      if (!projectPath) {
+        console.log('[GraphStore] No project path set!')
+        set({
+          symbolsLoading: false,
+          symbolsError: 'No project path set. Start the app with a project path.'
+        })
+        return
+      }
+
+      console.log('[GraphStore] Loading symbols from:', projectPath)
+      const result = await window.api.scanProject()
+      console.log('[GraphStore] Scan result:', result)
+
+      // Convert all symbols to nodes
+      const allSymbols: ExtractedSymbol[] = result.files.flatMap((file) => file.symbols)
+      console.log('[GraphStore] All symbols:', allSymbols)
+
+      const symbolNodesList = symbolsToNodes(allSymbols)
+      console.log('[GraphStore] Symbol nodes:', symbolNodesList)
+
+      console.log(
+        `[GraphStore] Loaded ${allSymbols.length} symbols from ${result.files.length} files`
+      )
+
+      // Update store with new symbols
+      set({
+        projectSymbols: result,
+        symbolsLoading: false,
+        nodesByLevel: {
+          ...nodesByLevel,
+          symbol: symbolNodesList
+        },
+        // Clear layout cache for symbol level so it gets re-laid out
+        layoutedLevels: new Set([...layoutedLevels].filter((l) => l !== 'symbol'))
+      })
+
+      console.log('[GraphStore] Store updated with symbols')
+    } catch (error) {
+      console.error('[GraphStore] Failed to load symbols:', error)
+      set({
+        symbolsLoading: false,
+        symbolsError: error instanceof Error ? error.message : String(error)
+      })
+    }
+  },
+
+  layoutCurrentLevel: async () => {
+    const { zoomLevel, nodesByLevel, edgesByLevel, layoutedLevels } = get()
+
+    // Skip if already laid out
+    if (layoutedLevels.has(zoomLevel)) {
+      return
+    }
+
+    const nodes = nodesByLevel[zoomLevel]
+    const edges = edgesByLevel[zoomLevel]
+    const options = LAYOUT_OPTIONS[zoomLevel]
+
+    try {
+      const { nodes: layoutedNodes } = await getLayoutedElements(nodes, edges, options)
+
+      set({
+        nodesByLevel: {
+          ...nodesByLevel,
+          [zoomLevel]: layoutedNodes
+        },
+        layoutedLevels: new Set([...layoutedLevels, zoomLevel])
+      })
+    } catch (error) {
+      console.error('Failed to layout nodes:', error)
+    }
+  },
 
   onNodesChange: (changes) => {
+    const { zoomLevel, nodesByLevel } = get()
     set({
-      nodes: applyNodeChanges(changes, get().nodes)
+      nodesByLevel: {
+        ...nodesByLevel,
+        [zoomLevel]: applyNodeChanges(changes, nodesByLevel[zoomLevel])
+      }
     })
   },
 
   onEdgesChange: (changes) => {
+    const { zoomLevel, edgesByLevel } = get()
     set({
-      edges: applyEdgeChanges(changes, get().edges)
+      edgesByLevel: {
+        ...edgesByLevel,
+        [zoomLevel]: applyEdgeChanges(changes, edgesByLevel[zoomLevel])
+      }
     })
   },
 
   onConnect: (connection) => {
+    const { zoomLevel, edgesByLevel } = get()
     set({
-      edges: addEdge({ ...connection, style: { stroke: '#475569', strokeWidth: 1 } }, get().edges)
+      edgesByLevel: {
+        ...edgesByLevel,
+        [zoomLevel]: addEdge(
+          { ...connection, style: { stroke: '#475569', strokeWidth: 1 } },
+          edgesByLevel[zoomLevel]
+        )
+      }
     })
-  },
-
-  // Helper to get currently selected nodes (React Flow manages selection via node.selected)
-  getSelectedNodes: () => {
-    return get().nodes.filter((node) => node.selected)
   }
 }))
+
+// Selector for current nodes and edges
+export const useCurrentNodes = (): Node[] => {
+  return useGraphStore((state) => state.nodesByLevel[state.zoomLevel])
+}
+
+export const useCurrentEdges = (): Edge[] => {
+  return useGraphStore((state) => state.edgesByLevel[state.zoomLevel])
+}

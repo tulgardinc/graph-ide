@@ -1,0 +1,10 @@
+{
+  "name": "test-project",
+  "version": "1.0.0",
+  "description": "A test TypeScript project for symbol extraction testing",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc"
+  }
+}

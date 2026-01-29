@@ -16,7 +16,7 @@ Traditional IDEs are file-centric. Developers spend excessive cognitive effort:
 
 Map IDE provides:
 
-1. **Visual architecture map** — multi-layered semantic views (System → Layer → Construct → Symbol → Code)
+1. **Visual architecture map** — 4 semantic zoom levels on the canvas (System → Layer → Construct → Symbol), with code viewed in a separate modal/popup
 2. **Chat as primary interface** — ask questions, request changes, explore the codebase
 3. **Selection = Scope = Safety** — map selection constrains what the LLM can see and edit
 
