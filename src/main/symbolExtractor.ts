@@ -9,7 +9,8 @@ import type {
   ProjectSymbols,
   SymbolKind,
   DependencyEdge,
-  EdgeType
+  EdgeType,
+  ParameterInfo
 } from './types'
 
 // =============================================================================
@@ -70,8 +71,138 @@ function getKindIcon(kind: SymbolKind): string {
 }
 
 // =============================================================================
+// METADATA EXTRACTION HELPERS
+// =============================================================================
+
+/**
+ * Extract JSDoc description from a node
+ */
+function extractJsDocDescription(node: Node): string | undefined {
+  if (!Node.isJSDocable(node)) return undefined
+
+  const jsDocs = node.getJsDocs()
+  if (jsDocs.length === 0) return undefined
+
+  // Get description from the first JSDoc comment
+  const description = jsDocs[0].getDescription().trim()
+  return description || undefined
+}
+
+/**
+ * Try to resolve a type to a project symbol ID
+ * Returns the symbol ID if the type refers to a project symbol (interface, type, class, enum)
+ * Returns undefined for primitive types or external types
+ */
+function resolveTypeToSymbolId(
+  typeNode: Node | undefined,
+  projectRoot: string
+): string | undefined {
+  if (!typeNode) return undefined
+
+  try {
+    // Handle type reference (e.g., User, ApiResponse<T>)
+    if (Node.isTypeReference(typeNode)) {
+      const typeName = typeNode.getTypeName()
+      if (Node.isIdentifier(typeName)) {
+        const symbol = typeName.getSymbol()
+        if (symbol) {
+          const aliasedSymbol = symbol.getAliasedSymbol()
+          const symbolToUse = aliasedSymbol || symbol
+          const declarations = symbolToUse.getDeclarations()
+
+          if (declarations && declarations.length > 0) {
+            const decl = declarations[0]
+            const declFile = decl.getSourceFile().getFilePath()
+
+            // Check if this is a project file (not from node_modules or external)
+            if (!declFile.includes('node_modules') && !declFile.includes('typescript/lib')) {
+              const filePath = toRelativePath(declFile, projectRoot)
+              const name = symbolToUse.getName()
+              return `${filePath}:${name}`
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Type resolution failed
+  }
+
+  return undefined
+}
+
+/**
+ * Get the raw type text from a type node
+ */
+function getTypeText(typeNode: Node | undefined): string | undefined {
+  if (!typeNode) return undefined
+  return typeNode.getText()
+}
+
+/**
+ * Extract function parameters with their types
+ */
+function extractFunctionParameters(
+  params: Node[],
+  projectRoot: string
+): ParameterInfo[] | undefined {
+  if (params.length === 0) return undefined
+
+  return params
+    .filter((p) => Node.isParameterDeclaration(p))
+    .map((param) => {
+      if (!Node.isParameterDeclaration(param)) {
+        return { name: 'unknown' }
+      }
+
+      const name = param.getName()
+      const typeNode = param.getTypeNode()
+
+      const result: ParameterInfo = { name }
+
+      if (typeNode) {
+        const typeId = resolveTypeToSymbolId(typeNode, projectRoot)
+        if (typeId) {
+          result.typeId = typeId
+        }
+        result.typeText = getTypeText(typeNode)
+      }
+
+      return result
+    })
+}
+
+/**
+ * Extract return type information from a function
+ */
+function extractReturnType(
+  returnTypeNode: Node | undefined,
+  projectRoot: string
+): { returnTypeId?: string; returnTypeText?: string } {
+  if (!returnTypeNode) return {}
+
+  const typeId = resolveTypeToSymbolId(returnTypeNode, projectRoot)
+  const typeText = getTypeText(returnTypeNode)
+
+  return {
+    returnTypeId: typeId,
+    returnTypeText: typeText
+  }
+}
+
+// =============================================================================
 // SYMBOL EXTRACTION
 // =============================================================================
+
+/**
+ * Options for creating an ExtractedSymbol
+ */
+interface CreateSymbolOptions {
+  description?: string
+  returnTypeId?: string
+  returnTypeText?: string
+  parameters?: ParameterInfo[]
+}
 
 /**
  * Create an ExtractedSymbol from node information
@@ -84,9 +215,10 @@ function createSymbol(
   endLine: number,
   startColumn: number,
   endColumn: number,
-  exported: boolean
+  exported: boolean,
+  options?: CreateSymbolOptions
 ): ExtractedSymbol {
-  return {
+  const symbol: ExtractedSymbol = {
     id: `${filePath}:${name}`,
     name,
     kind,
@@ -97,6 +229,22 @@ function createSymbol(
     endColumn,
     exported
   }
+
+  // Add optional metadata
+  if (options?.description) {
+    symbol.description = options.description
+  }
+  if (options?.returnTypeId) {
+    symbol.returnTypeId = options.returnTypeId
+  }
+  if (options?.returnTypeText) {
+    symbol.returnTypeText = options.returnTypeText
+  }
+  if (options?.parameters) {
+    symbol.parameters = options.parameters
+  }
+
+  return symbol
 }
 
 /**
@@ -111,6 +259,12 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
   for (const func of sourceFile.getFunctions()) {
     const name = func.getName()
     if (name) {
+      // Extract function metadata
+      const description = extractJsDocDescription(func)
+      const parameters = extractFunctionParameters(func.getParameters(), projectRoot)
+      const returnTypeNode = func.getReturnTypeNode()
+      const { returnTypeId, returnTypeText } = extractReturnType(returnTypeNode, projectRoot)
+
       symbols.push(
         createSymbol(
           name,
@@ -120,7 +274,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
           func.getEndLineNumber(),
           func.getStart() - func.getStartLinePos(),
           func.getEnd() - func.getStartLinePos(),
-          isExported(func)
+          isExported(func),
+          { description, parameters, returnTypeId, returnTypeText }
         )
       )
     }
@@ -130,6 +285,9 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
   for (const cls of sourceFile.getClasses()) {
     const name = cls.getName()
     if (name) {
+      // Extract class metadata (just description for classes)
+      const description = extractJsDocDescription(cls)
+
       symbols.push(
         createSymbol(
           name,
@@ -139,7 +297,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
           cls.getEndLineNumber(),
           cls.getStart() - cls.getStartLinePos(),
           cls.getEnd() - cls.getStartLinePos(),
-          isExported(cls)
+          isExported(cls),
+          { description }
         )
       )
     }
@@ -148,6 +307,9 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
   // Extract interfaces
   for (const iface of sourceFile.getInterfaces()) {
     const name = iface.getName()
+    // Extract interface metadata (just description)
+    const description = extractJsDocDescription(iface)
+
     symbols.push(
       createSymbol(
         name,
@@ -157,7 +319,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
         iface.getEndLineNumber(),
         iface.getStart() - iface.getStartLinePos(),
         iface.getEnd() - iface.getStartLinePos(),
-        isExported(iface)
+        isExported(iface),
+        { description }
       )
     )
   }
@@ -165,6 +328,9 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
   // Extract type aliases
   for (const typeAlias of sourceFile.getTypeAliases()) {
     const name = typeAlias.getName()
+    // Extract type alias metadata (just description)
+    const description = extractJsDocDescription(typeAlias)
+
     symbols.push(
       createSymbol(
         name,
@@ -174,7 +340,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
         typeAlias.getEndLineNumber(),
         typeAlias.getStart() - typeAlias.getStartLinePos(),
         typeAlias.getEnd() - typeAlias.getStartLinePos(),
-        isExported(typeAlias)
+        isExported(typeAlias),
+        { description }
       )
     )
   }
@@ -182,6 +349,9 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
   // Extract enums
   for (const enumDecl of sourceFile.getEnums()) {
     const name = enumDecl.getName()
+    // Extract enum metadata (just description)
+    const description = extractJsDocDescription(enumDecl)
+
     symbols.push(
       createSymbol(
         name,
@@ -191,7 +361,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
         enumDecl.getEndLineNumber(),
         enumDecl.getStart() - enumDecl.getStartLinePos(),
         enumDecl.getEnd() - enumDecl.getStartLinePos(),
-        isExported(enumDecl)
+        isExported(enumDecl),
+        { description }
       )
     )
   }
@@ -201,15 +372,32 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
     const isConst = varStatement.getDeclarationKind() === 'const'
     const exported = isExported(varStatement)
 
+    // Get JSDoc from the variable statement
+    const statementDescription = extractJsDocDescription(varStatement)
+
     for (const decl of varStatement.getDeclarations()) {
       const name = decl.getName()
       const initializer = decl.getInitializer()
 
       // Check if it's an arrow function or function expression
       let kind: SymbolKind = isConst ? 'constant' : 'variable'
+      let options: CreateSymbolOptions = { description: statementDescription }
+
       if (initializer) {
         if (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer)) {
           kind = 'function'
+
+          // Extract function metadata for arrow functions/function expressions
+          const parameters = extractFunctionParameters(initializer.getParameters(), projectRoot)
+          const returnTypeNode = initializer.getReturnTypeNode()
+          const { returnTypeId, returnTypeText } = extractReturnType(returnTypeNode, projectRoot)
+
+          options = {
+            description: statementDescription,
+            parameters,
+            returnTypeId,
+            returnTypeText
+          }
         } else if (Node.isObjectLiteralExpression(initializer)) {
           kind = 'object'
         }
@@ -224,7 +412,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, projectRoot: strin
           varStatement.getEndLineNumber(),
           varStatement.getStart() - varStatement.getStartLinePos(),
           varStatement.getEnd() - varStatement.getStartLinePos(),
-          exported
+          exported,
+          options
         )
       )
     }

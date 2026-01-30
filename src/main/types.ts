@@ -16,6 +16,18 @@ export type SymbolKind =
   | 'object'
 
 /**
+ * A function parameter with optional type reference
+ */
+export interface ParameterInfo {
+  /** Parameter name */
+  name: string
+  /** Symbol ID of the parameter type (if it references a project symbol) */
+  typeId?: string
+  /** Raw type text (for display when typeId is not available) */
+  typeText?: string
+}
+
+/**
  * A single symbol extracted from a TypeScript file
  */
 export interface ExtractedSymbol {
@@ -37,6 +49,14 @@ export interface ExtractedSymbol {
   startColumn: number
   /** End column (0-indexed) */
   endColumn: number
+  /** JSDoc description (markdown) */
+  description?: string
+  /** Symbol ID of the return type - for functions only (if it references a project symbol) */
+  returnTypeId?: string
+  /** Raw return type text - for functions only (for display when returnTypeId is not available) */
+  returnTypeText?: string
+  /** Function parameters - for functions only */
+  parameters?: ParameterInfo[]
 }
 
 /**

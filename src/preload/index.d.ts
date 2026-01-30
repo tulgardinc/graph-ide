@@ -43,5 +43,6 @@ export type {
   SymbolKind,
   FileParseError,
   CallEdge,
-  EdgeType
+  EdgeType,
+  ParameterInfo
 } from '../main/types'
