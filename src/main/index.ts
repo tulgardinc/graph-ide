@@ -1,10 +1,31 @@
+import { config } from 'dotenv'
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { readFileSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
+
+// Load .env file from project root
+// In dev: __dirname is out/main, so go up 2 levels to project root
+// In prod: app.getAppPath() points to the app resources
+const envPath = resolve(__dirname, '../../.env')
+console.log('[Main] Loading .env from:', envPath)
+const envResult = config({ path: envPath })
+if (envResult.error) {
+  console.warn('[Main] Failed to load .env:', envResult.error.message)
+} else {
+  console.log('[Main] .env loaded successfully')
+}
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { extractProjectSymbols, formatProjectSymbols } from './symbolExtractor'
 import type { ExtractorOptions } from './types'
+import {
+  sendMessageStream,
+  cancelStream,
+  initializeClient,
+  isClientReady,
+  getApiKeyStatus,
+  type ChatMessage
+} from './llmClient'
 
 // =============================================================================
 // PROJECT PATH FROM CLI ARGUMENTS
@@ -190,6 +211,78 @@ app.whenReady().then(() => {
       }
     }
   )
+
+  // =============================================================================
+  // IPC HANDLERS FOR CHAT / LLM
+  // =============================================================================
+
+  /**
+   * Check if the LLM client is ready (API key configured)
+   */
+  ipcMain.handle('chat:status', () => {
+    return {
+      ready: isClientReady(),
+      ...getApiKeyStatus()
+    }
+  })
+
+  /**
+   * Set the API key at runtime
+   */
+  ipcMain.handle('chat:setApiKey', (_, apiKey: string) => {
+    initializeClient(apiKey)
+    return isClientReady()
+  })
+
+  /**
+   * Send a chat message and stream the response
+   * Returns immediately, sends chunks via 'chat:chunk' events
+   */
+  ipcMain.handle(
+    'chat:send',
+    async (
+      event,
+      options: {
+        messages: ChatMessage[]
+        model?: string
+        maxTokens?: number
+        systemPrompt?: string
+      }
+    ) => {
+      const webContents = event.sender
+
+      return new Promise<{ success: boolean; error?: string }>((resolve) => {
+        sendMessageStream(
+          options,
+          // On chunk
+          (chunk) => {
+            webContents.send('chat:chunk', chunk)
+          },
+          // On error
+          (error) => {
+            webContents.send('chat:error', error.message)
+            resolve({ success: false, error: error.message })
+          },
+          // On complete
+          (fullResponse) => {
+            webContents.send('chat:complete', fullResponse)
+            resolve({ success: true })
+          }
+        )
+      })
+    }
+  )
+
+  /**
+   * Cancel the current streaming response
+   */
+  ipcMain.handle('chat:cancel', () => {
+    return cancelStream()
+  })
+
+  // Initialize LLM client with env var (dotenv has loaded by now)
+  console.log('[Main] Initializing LLM client...')
+  initializeClient()
 
   // Log project path on startup
   if (projectPath) {

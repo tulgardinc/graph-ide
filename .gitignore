@@ -5,3 +5,7 @@ out
 .eslintcache
 *.log*
 react-flow-docs/
+
+# Environment variables (contains API keys)
+.env
+.env.local

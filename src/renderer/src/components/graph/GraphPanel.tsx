@@ -21,6 +21,9 @@ import { ZoomLevelIndicator } from './ZoomLevelIndicator'
 import { NodeDetailPanel } from './NodeDetailPanel'
 import type { ExtractedSymbol } from '../../../../preload/index.d'
 
+// Default panel width matches the defaultSize in NodeDetailPanel
+const DEFAULT_DETAIL_PANEL_WIDTH = 400
+
 function GraphCanvas(): React.JSX.Element {
   const rawNodes = useCurrentNodes()
   const rawEdges = useCurrentEdges()
@@ -39,6 +42,8 @@ function GraphCanvas(): React.JSX.Element {
   const [selectedNodes, setSelectedNodes] = useState<Node[]>([])
   // Track if detail panel is open (user can close it even when node is selected)
   const [detailPanelOpen, setDetailPanelOpen] = useState(false)
+  // Track detail panel width for positioning other elements
+  const [detailPanelWidth, setDetailPanelWidth] = useState(DEFAULT_DETAIL_PANEL_WIDTH)
 
   const onSelectionChange = useCallback(
     (params: OnSelectionChangeParams) => {
@@ -193,8 +198,10 @@ function GraphCanvas(): React.JSX.Element {
         <Background color="#1e293b" gap={20} size={1} />
       </ReactFlow>
 
-      {/* Zoom level indicator */}
-      <ZoomLevelIndicator />
+      {/* Zoom level indicator - offset when detail panel is open */}
+      <ZoomLevelIndicator
+        leftOffset={detailPanelOpen && selectedSymbol ? detailPanelWidth + 32 : 16}
+      />
 
       {/* Node detail panel - shows when a symbol node is selected and panel is open */}
       {detailPanelOpen && selectedSymbol && (
@@ -203,12 +210,16 @@ function GraphCanvas(): React.JSX.Element {
           onClose={handleCloseDetailPanel}
           graphNodeIds={graphNodeIds}
           onNavigateToSymbol={handleNavigateToSymbol}
+          onResize={setDetailPanelWidth}
         />
       )}
 
-      {/* Selection info panel */}
+      {/* Selection info panel - offset when detail panel is open */}
       {selectedNodes.length > 0 && (
-        <div className="absolute bottom-4 left-4 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 backdrop-blur-sm z-0">
+        <div
+          className="absolute bottom-4 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 backdrop-blur-sm z-0 transition-[left] duration-150"
+          style={{ left: detailPanelOpen && selectedSymbol ? detailPanelWidth + 32 : 16 }}
+        >
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
             Selected ({selectedNodes.length})
           </p>

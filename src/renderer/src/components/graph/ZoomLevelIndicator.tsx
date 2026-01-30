@@ -7,12 +7,22 @@ import {
 } from '../../store/graphStore'
 import { cn } from '../../lib/utils'
 
-export function ZoomLevelIndicator(): React.JSX.Element {
+interface ZoomLevelIndicatorProps {
+  /** Left offset in pixels (to position after the detail panel) */
+  leftOffset?: number
+}
+
+export function ZoomLevelIndicator({
+  leftOffset = 16
+}: ZoomLevelIndicatorProps): React.JSX.Element {
   const zoomLevel = useGraphStore((state) => state.zoomLevel)
   const setZoomLevel = useGraphStore((state) => state.setZoomLevel)
 
   return (
-    <div className="absolute left-4 top-4 z-10 flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/90 px-2 py-1.5 backdrop-blur-sm">
+    <div
+      className="absolute top-4 z-10 flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/90 px-2 py-1.5 backdrop-blur-sm transition-[left] duration-150"
+      style={{ left: leftOffset }}
+    >
       {ZOOM_LEVELS.map((level, index) => (
         <div key={level} className="flex items-center">
           <ZoomLevelButton

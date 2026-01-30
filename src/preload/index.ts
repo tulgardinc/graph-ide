@@ -3,6 +3,12 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Note: Types are defined in index.d.ts, not imported from main to avoid bundling issues
 
+// Chat message type for the API
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 // Custom APIs for renderer
 const api = {
   /**
@@ -43,6 +49,77 @@ const api = {
    */
   readFileLines: (filePath: string, startLine: number, endLine: number): Promise<string> => {
     return ipcRenderer.invoke('file:readLines', filePath, startLine, endLine)
+  },
+
+  // ==========================================================================
+  // Chat / LLM API
+  // ==========================================================================
+
+  /**
+   * Check if the LLM client is ready (API key configured)
+   */
+  chatStatus: (): Promise<{ ready: boolean; configured: boolean; source: string }> => {
+    return ipcRenderer.invoke('chat:status')
+  },
+
+  /**
+   * Set the API key at runtime
+   */
+  chatSetApiKey: (apiKey: string): Promise<boolean> => {
+    return ipcRenderer.invoke('chat:setApiKey', apiKey)
+  },
+
+  /**
+   * Send a chat message and get streaming response
+   * Use onChatChunk, onChatError, onChatComplete to receive events
+   */
+  chatSend: (options: {
+    messages: ChatMessage[]
+    model?: string
+    maxTokens?: number
+    systemPrompt?: string
+  }): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('chat:send', options)
+  },
+
+  /**
+   * Cancel the current streaming response
+   */
+  chatCancel: (): Promise<boolean> => {
+    return ipcRenderer.invoke('chat:cancel')
+  },
+
+  /**
+   * Subscribe to chat chunk events (streaming text)
+   */
+  onChatChunk: (callback: (chunk: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, chunk: string): void => {
+      callback(chunk)
+    }
+    ipcRenderer.on('chat:chunk', handler)
+    return () => ipcRenderer.removeListener('chat:chunk', handler)
+  },
+
+  /**
+   * Subscribe to chat error events
+   */
+  onChatError: (callback: (error: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, error: string): void => {
+      callback(error)
+    }
+    ipcRenderer.on('chat:error', handler)
+    return () => ipcRenderer.removeListener('chat:error', handler)
+  },
+
+  /**
+   * Subscribe to chat complete events
+   */
+  onChatComplete: (callback: (fullResponse: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, fullResponse: string): void => {
+      callback(fullResponse)
+    }
+    ipcRenderer.on('chat:complete', handler)
+    return () => ipcRenderer.removeListener('chat:complete', handler)
   }
 }
 

@@ -2,6 +2,33 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type { ProjectSymbols, ExtractorOptions } from '../main/types'
 
 /**
+ * Chat message format for LLM API
+ */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/**
+ * Chat status response
+ */
+export interface ChatStatus {
+  ready: boolean
+  configured: boolean
+  source: string
+}
+
+/**
+ * Options for sending a chat message
+ */
+export interface ChatSendOptions {
+  messages: ChatMessage[]
+  model?: string
+  maxTokens?: number
+  systemPrompt?: string
+}
+
+/**
  * API exposed to the renderer process via contextBridge
  */
 interface MapIdeAPI {
@@ -36,6 +63,49 @@ interface MapIdeAPI {
    * @returns The lines of text from startLine to endLine
    */
   readFileLines: (filePath: string, startLine: number, endLine: number) => Promise<string>
+
+  // ==========================================================================
+  // Chat / LLM API
+  // ==========================================================================
+
+  /**
+   * Check if the LLM client is ready (API key configured)
+   */
+  chatStatus: () => Promise<ChatStatus>
+
+  /**
+   * Set the API key at runtime
+   */
+  chatSetApiKey: (apiKey: string) => Promise<boolean>
+
+  /**
+   * Send a chat message and get streaming response
+   * Use onChatChunk, onChatError, onChatComplete to receive events
+   */
+  chatSend: (options: ChatSendOptions) => Promise<{ success: boolean; error?: string }>
+
+  /**
+   * Cancel the current streaming response
+   */
+  chatCancel: () => Promise<boolean>
+
+  /**
+   * Subscribe to chat chunk events (streaming text)
+   * Returns an unsubscribe function
+   */
+  onChatChunk: (callback: (chunk: string) => void) => () => void
+
+  /**
+   * Subscribe to chat error events
+   * Returns an unsubscribe function
+   */
+  onChatError: (callback: (error: string) => void) => () => void
+
+  /**
+   * Subscribe to chat complete events
+   * Returns an unsubscribe function
+   */
+  onChatComplete: (callback: (fullResponse: string) => void) => () => void
 }
 
 declare global {
