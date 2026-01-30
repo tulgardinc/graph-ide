@@ -2,6 +2,14 @@
 
 ## What Works
 
+### Selection-Based Dimming ✅ NEW
+
+- Node selection dims unrelated nodes/edges (20% opacity)
+- Selected nodes get cyan glow highlight (boxShadow)
+- Direct predecessors and successors stay visible
+- Multi-select shows union of all connected nodes
+- Edge dimming for edges not connecting highlighted nodes
+
 ### Core Infrastructure
 
 - ✅ Electron + Vite + React + TypeScript setup

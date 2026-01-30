@@ -52,26 +52,37 @@ export interface FileSymbols {
 /**
  * Type of edge relationship
  */
-export type EdgeType = 'call' | 'component-use'
+export type EdgeType =
+  | 'call'
+  | 'component-use'
+  | 'global-read'
+  | 'global-write'
+  | 'class-instantiation'
+  | 'enum-use'
 
 /**
- * A call relationship between two symbols
+ * A dependency relationship between two symbols
  */
-export interface CallEdge {
-  /** Unique edge ID: "caller->callee" */
+export interface DependencyEdge {
+  /** Unique edge ID: "source->target" */
   id: string
-  /** Caller symbol ID (filePath:name) */
+  /** Source symbol ID (filePath:name) - the symbol that depends */
   source: string
-  /** Callee symbol ID (filePath:name) */
+  /** Target symbol ID (filePath:name) - the symbol being depended on */
   target: string
   /** Type of relationship */
   type: EdgeType
-  /** Where the call happens */
-  callSite: {
+  /** Where the dependency occurs */
+  location: {
     file: string
     line: number
   }
 }
+
+/**
+ * @deprecated Use DependencyEdge instead
+ */
+export type CallEdge = DependencyEdge
 
 /**
  * Complete project symbol extraction result

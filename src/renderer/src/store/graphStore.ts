@@ -120,9 +120,15 @@ function getSymbolPrefix(kind: SymbolKind): string {
 
 /**
  * Convert extracted symbols to React Flow nodes
+ * Filters out types and interfaces (they're kept in the extractor but not rendered)
  */
 function symbolsToNodes(symbols: ExtractedSymbol[]): Node[] {
-  return symbols.map((symbol) => ({
+  // Filter out types and interfaces - keep them in the data but don't render as nodes
+  const renderableSymbols = symbols.filter(
+    (symbol) => symbol.kind !== 'type' && symbol.kind !== 'interface'
+  )
+
+  return renderableSymbols.map((symbol) => ({
     id: symbol.id,
     type: 'default',
     position: { x: 0, y: 0 }, // Will be computed by ELK
@@ -138,15 +144,53 @@ function symbolsToNodes(symbols: ExtractedSymbol[]): Node[] {
 }
 
 /**
- * Convert call edges to React Flow edges with call graph styling
+ * Convert dependency edges to React Flow edges with dependency graph styling
  * - Function calls: Cyan (#22d3ee)
  * - Component uses: Pink/Magenta (#f472b6)
+ * - Global reads: Yellow/Gold (#fbbf24)
+ * - Global writes: Orange (#f97316)
+ * - Class instantiation: Purple (#a855f7)
  */
-function callEdgesToFlowEdges(callEdges: CallEdge[]): Edge[] {
-  return callEdges.map((edge) => {
+function dependencyEdgesToFlowEdges(dependencyEdges: CallEdge[]): Edge[] {
+  return dependencyEdges.map((edge) => {
     // Different colors for different edge types
-    const isComponentUse = edge.type === 'component-use'
-    const strokeColor = isComponentUse ? '#f472b6' : '#22d3ee' // Pink for components, Cyan for calls
+    let strokeColor: string
+    let strokeWidth: number
+    let strokeDasharray: string | undefined
+
+    switch (edge.type) {
+      case 'component-use':
+        strokeColor = '#f472b6' // Pink
+        strokeWidth = 2
+        strokeDasharray = undefined
+        break
+      case 'global-read':
+        strokeColor = '#fbbf24' // Yellow/Gold
+        strokeWidth = 1.5
+        strokeDasharray = '4,2' // Dashed line for reads
+        break
+      case 'global-write':
+        strokeColor = '#f97316' // Orange
+        strokeWidth = 2
+        strokeDasharray = undefined
+        break
+      case 'class-instantiation':
+        strokeColor = '#a855f7' // Purple
+        strokeWidth = 2
+        strokeDasharray = undefined
+        break
+      case 'enum-use':
+        strokeColor = '#eab308' // Yellow (matches enum node color)
+        strokeWidth = 1.5
+        strokeDasharray = undefined
+        break
+      case 'call':
+      default:
+        strokeColor = '#22d3ee' // Cyan
+        strokeWidth = 1.5
+        strokeDasharray = undefined
+        break
+    }
 
     return {
       id: edge.id,
@@ -156,7 +200,8 @@ function callEdgesToFlowEdges(callEdges: CallEdge[]): Edge[] {
       animated: false,
       style: {
         stroke: strokeColor,
-        strokeWidth: isComponentUse ? 2 : 1.5
+        strokeWidth,
+        strokeDasharray
       },
       markerEnd: {
         type: 'arrowclosed' as const,
@@ -165,7 +210,7 @@ function callEdgesToFlowEdges(callEdges: CallEdge[]): Edge[] {
         height: 12
       },
       data: {
-        callSite: edge.callSite,
+        location: edge.location,
         edgeType: edge.type
       }
     }
@@ -587,6 +632,9 @@ interface GraphState {
   // Track which levels have been laid out
   layoutedLevels: Set<ZoomLevel>
 
+  // Selection state for highlighting
+  selectedNodeIds: Set<string>
+
   // Project symbols from tree-sitter
   projectSymbols: ProjectSymbols | null
   symbolsLoading: boolean
@@ -599,6 +647,7 @@ interface GraphState {
 
   // Actions
   setZoomLevel: (level: ZoomLevel) => void
+  setSelectedNodeIds: (ids: string[]) => void
   layoutCurrentLevel: () => Promise<void>
   loadSymbols: () => Promise<void>
   resetSymbols: () => void
@@ -623,9 +672,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   layoutedLevels: new Set<ZoomLevel>(),
 
+  selectedNodeIds: new Set<string>(),
+
   projectSymbols: null,
   symbolsLoading: false,
   symbolsError: null,
+
+  setSelectedNodeIds: (ids: string[]) => {
+    set({ selectedNodeIds: new Set(ids) })
+  },
 
   setZoomLevel: (level) => {
     set({ zoomLevel: level })
@@ -701,7 +756,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         `[GraphStore] Call edges: ${callEdges.length} total, ${validCallEdges.length} valid`
       )
 
-      const symbolEdgesList = callEdgesToFlowEdges(validCallEdges)
+      const symbolEdgesList = dependencyEdgesToFlowEdges(validCallEdges)
       console.log('[GraphStore] Symbol edges:', symbolEdgesList.length)
 
       console.log(
@@ -843,11 +898,61 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   }
 }))
 
-// Selector for current nodes and edges
+// =============================================================================
+// SELECTION HIGHLIGHTING HELPERS (exported for use in components)
+// =============================================================================
+
+/**
+ * Compute the set of connected node IDs (predecessors + successors) for the selected nodes.
+ * - Predecessors: nodes whose edges point TO the selected nodes (source → selected)
+ * - Successors: nodes that selected nodes point TO (selected → target)
+ */
+export function getConnectedNodeIds(selectedIds: Set<string>, edges: Edge[]): Set<string> {
+  // Start with selected nodes themselves
+  const connected = new Set(selectedIds)
+
+  for (const edge of edges) {
+    // Predecessors: if edge.target is selected, include edge.source
+    if (selectedIds.has(edge.target)) {
+      connected.add(edge.source)
+    }
+    // Successors: if edge.source is selected, include edge.target
+    if (selectedIds.has(edge.source)) {
+      connected.add(edge.target)
+    }
+  }
+
+  return connected
+}
+
+/**
+ * Check if an edge is connected to the selected/highlighted nodes
+ */
+export function isEdgeConnected(edge: Edge, connectedNodeIds: Set<string>): boolean {
+  return connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)
+}
+
+// =============================================================================
+// SELECTORS (simple, no derived state to avoid infinite loops)
+// =============================================================================
+
+/**
+ * Selector for current nodes (raw, without styling transformations)
+ */
 export const useCurrentNodes = (): Node[] => {
   return useGraphStore((state) => state.nodesByLevel[state.zoomLevel])
 }
 
+/**
+ * Selector for current edges (raw, without styling transformations)
+ */
 export const useCurrentEdges = (): Edge[] => {
   return useGraphStore((state) => state.edgesByLevel[state.zoomLevel])
+}
+
+/**
+ * Selector for selected node IDs
+ */
+export const useSelectedNodeIds = (): Set<string> => {
+  return useGraphStore((state) => state.selectedNodeIds)
 }

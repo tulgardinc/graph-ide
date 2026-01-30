@@ -2,7 +2,8 @@
  * User Service - handles user-related business logic
  */
 import { ApiClient } from '../api/client'
-import type { User, CreateUserDto, ApiResponse, PaginationParams } from '../types'
+import type { User, CreateUserDto, ApiResponse, PaginationParams, UserRole } from '../types'
+import { UserRole as UserRoleEnum } from '../types'
 import { validateEmail, validatePassword } from '../utils/validators'
 
 /**
@@ -52,6 +53,36 @@ export class UserService {
 // Factory function for creating UserService
 export const createUserService = (apiClient: ApiClient): UserService => {
   return new UserService(apiClient)
+}
+
+/**
+ * Check if the given role has admin privileges
+ */
+export function isAdmin(role: UserRole): boolean {
+  return role === UserRoleEnum.Admin
+}
+
+/**
+ * Get the default role for new users
+ */
+export function getDefaultRole(): UserRole {
+  return UserRoleEnum.User
+}
+
+/**
+ * Get role display label
+ */
+export function getRoleLabel(role: UserRole): string {
+  switch (role) {
+    case UserRoleEnum.Admin:
+      return 'Administrator'
+    case UserRoleEnum.User:
+      return 'Standard User'
+    case UserRoleEnum.Guest:
+      return 'Guest'
+    default:
+      return 'Unknown'
+  }
 }
 
 // Default export as well

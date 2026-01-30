@@ -2,6 +2,19 @@
 
 ## Current Focus
 
+### Selection-Based Dimming (Just Completed)
+
+Implemented node selection dimming with predecessor/successor highlighting:
+
+- When nodes are selected, all unrelated nodes/edges are dimmed (20% opacity)
+- Selected nodes get a cyan glow highlight
+- Direct predecessors (nodes that point TO selected) stay visible
+- Direct successors (nodes selected point TO) stay visible
+- Works with multi-select (union of all connected nodes)
+- Implemented via Zustand selectors that compute styles dynamically
+
+## Previous Focus
+
 Call graph visualization with function calls and JSX component usage detection.
 
 ## Recent Changes

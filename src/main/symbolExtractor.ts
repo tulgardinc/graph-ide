@@ -8,7 +8,7 @@ import type {
   FileSymbols,
   ProjectSymbols,
   SymbolKind,
-  CallEdge,
+  DependencyEdge,
   EdgeType
 } from './types'
 
@@ -336,14 +336,14 @@ export function findContainingFunctionByAncestors(
 }
 
 /**
- * Extract call edges from the project using O(n) algorithm with getAncestors()
+ * Extract function call dependency edges from the project using O(n) algorithm with getAncestors()
  */
-function extractCallEdges(
+function extractCallDependencyEdges(
   project: Project,
   symbolMap: Map<string, ExtractedSymbol>,
   projectRoot: string
-): CallEdge[] {
-  const edges: CallEdge[] = []
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = []
   const seenEdges = new Set<string>()
 
   for (const sourceFile of project.getSourceFiles()) {
@@ -435,7 +435,7 @@ function extractCallEdges(
         source: caller.id,
         target: calleeId,
         type: 'call',
-        callSite: {
+        location: {
           file: relativePath,
           line: callLine
         }
@@ -504,11 +504,393 @@ function extractCallEdges(
         source: caller.id,
         target: componentId,
         type: 'component-use',
-        callSite: {
+        location: {
           file: relativePath,
           line: jsxLine
         }
       })
+    }
+  }
+
+  return edges
+}
+
+/**
+ * Determine if an identifier usage is a write operation
+ * Checks for assignment expressions (=, +=, -=, etc.) and unary expressions (++, --)
+ */
+function isWriteOperation(identifier: Node): boolean {
+  const parent = identifier.getParent()
+  if (!parent) return false
+
+  // Check for assignment: globalVar = value, globalVar += value, etc.
+  if (Node.isBinaryExpression(parent)) {
+    const operatorToken = parent.getOperatorToken().getKind()
+    const isAssignmentOperator =
+      operatorToken === SyntaxKind.EqualsToken ||
+      operatorToken === SyntaxKind.PlusEqualsToken ||
+      operatorToken === SyntaxKind.MinusEqualsToken ||
+      operatorToken === SyntaxKind.AsteriskEqualsToken ||
+      operatorToken === SyntaxKind.SlashEqualsToken ||
+      operatorToken === SyntaxKind.PercentEqualsToken ||
+      operatorToken === SyntaxKind.AmpersandEqualsToken ||
+      operatorToken === SyntaxKind.BarEqualsToken ||
+      operatorToken === SyntaxKind.CaretEqualsToken ||
+      operatorToken === SyntaxKind.LessThanLessThanEqualsToken ||
+      operatorToken === SyntaxKind.GreaterThanGreaterThanEqualsToken ||
+      operatorToken === SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken ||
+      operatorToken === SyntaxKind.AsteriskAsteriskEqualsToken ||
+      operatorToken === SyntaxKind.BarBarEqualsToken ||
+      operatorToken === SyntaxKind.AmpersandAmpersandEqualsToken ||
+      operatorToken === SyntaxKind.QuestionQuestionEqualsToken
+
+    // Check if identifier is on the left side of the assignment
+    if (isAssignmentOperator) {
+      const left = parent.getLeft()
+      return left === identifier || left.getText() === identifier.getText()
+    }
+  }
+
+  // Check for prefix unary: ++globalVar, --globalVar
+  if (Node.isPrefixUnaryExpression(parent)) {
+    const operator = parent.getOperatorToken()
+    return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken
+  }
+
+  // Check for postfix unary: globalVar++, globalVar--
+  if (Node.isPostfixUnaryExpression(parent)) {
+    const operator = parent.getOperatorToken()
+    return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken
+  }
+
+  return false
+}
+
+/**
+ * Extract global variable dependency edges (reads and writes) from the project
+ * Uses O(n) algorithm - iterates identifiers once and checks against global symbol set
+ */
+function extractGlobalVariableEdges(
+  project: Project,
+  symbolMap: Map<string, ExtractedSymbol>,
+  projectRoot: string
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build a set of global variable symbol IDs (module-level constants, variables, objects)
+  const globalVarIds = new Set<string>()
+  for (const [id, symbol] of symbolMap) {
+    if (symbol.kind === 'constant' || symbol.kind === 'variable' || symbol.kind === 'object') {
+      globalVarIds.add(id)
+    }
+  }
+
+  // If no global variables, nothing to do
+  if (globalVarIds.size === 0) {
+    return edges
+  }
+
+  for (const sourceFile of project.getSourceFiles()) {
+    const relativePath = toRelativePath(sourceFile.getFilePath(), projectRoot)
+
+    // Find all identifiers in this file - O(n) where n is nodes in file
+    const identifiers = sourceFile.getDescendantsOfKind(SyntaxKind.Identifier)
+
+    for (const identifier of identifiers) {
+      // Skip if this identifier is part of a declaration (not a usage)
+      const parent = identifier.getParent()
+      if (!parent) continue
+
+      // Skip declarations where this identifier is the NAME being declared (not an initializer/usage)
+      if (Node.isVariableDeclaration(parent)) {
+        // Only skip if this identifier IS the name being declared
+        // Don't skip if this identifier is in the initializer (e.g., `const old = state`)
+        const nameNode = parent.getNameNode()
+        if (nameNode === identifier || nameNode.getText() === identifier.getText()) {
+          continue
+        }
+      }
+
+      // Skip function/method declarations, parameters, imports, types, etc.
+      if (
+        Node.isFunctionDeclaration(parent) ||
+        Node.isParameterDeclaration(parent) ||
+        Node.isPropertyDeclaration(parent) ||
+        Node.isPropertySignature(parent) ||
+        Node.isMethodDeclaration(parent) ||
+        Node.isImportSpecifier(parent) ||
+        Node.isExportSpecifier(parent) ||
+        Node.isTypeReference(parent) ||
+        Node.isTypeAliasDeclaration(parent) ||
+        Node.isInterfaceDeclaration(parent)
+      ) {
+        continue
+      }
+
+      // Get the symbol this identifier references
+      try {
+        const symbol = identifier.getSymbol()
+        if (!symbol) continue
+
+        // Follow aliased symbols (imports)
+        const aliasedSymbol = symbol.getAliasedSymbol()
+        const symbolToUse = aliasedSymbol || symbol
+        const declarations = symbolToUse.getDeclarations()
+
+        if (!declarations || declarations.length === 0) continue
+
+        const decl = declarations[0]
+        const declSourceFile = decl.getSourceFile()
+        const globalVarFilePath = toRelativePath(declSourceFile.getFilePath(), projectRoot)
+        const globalVarName = symbolToUse.getName()
+        const globalVarId = `${globalVarFilePath}:${globalVarName}`
+
+        // Check if this is a global variable we're tracking
+        if (!globalVarIds.has(globalVarId)) continue
+
+        // Find the containing function
+        const caller = findContainingFunctionByAncestors(identifier, projectRoot)
+        if (!caller) continue // Skip if not inside a function
+
+        // Skip self-references (shouldn't happen, but just in case)
+        if (caller.id === globalVarId) continue
+
+        // Determine if this is a read or write
+        const isWrite = isWriteOperation(identifier)
+        const edgeType = isWrite ? 'global-write' : 'global-read'
+
+        // Create unique edge ID (function -> global var with type)
+        const edgeId = `${caller.id}->${globalVarId}:${edgeType}`
+
+        // Skip duplicates (same function accessing same global with same type)
+        if (seenEdges.has(edgeId)) continue
+        seenEdges.add(edgeId)
+
+        edges.push({
+          id: edgeId, // Include edge type in ID to ensure uniqueness
+          source: caller.id,
+          target: globalVarId,
+          type: edgeType,
+          location: {
+            file: relativePath,
+            line: identifier.getStartLineNumber()
+          }
+        })
+      } catch {
+        // Symbol resolution failed, skip this identifier
+        continue
+      }
+    }
+  }
+
+  return edges
+}
+
+/**
+ * Extract class instantiation dependency edges from the project
+ * Detects when functions instantiate classes with `new ClassName()`
+ * Uses O(n) algorithm - iterates NewExpression nodes once and checks against class symbol set
+ */
+function extractClassInstantiationEdges(
+  project: Project,
+  symbolMap: Map<string, ExtractedSymbol>,
+  projectRoot: string
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build a set of class symbol IDs
+  const classIds = new Set<string>()
+  for (const [id, symbol] of symbolMap) {
+    if (symbol.kind === 'class') {
+      classIds.add(id)
+    }
+  }
+
+  // If no classes, nothing to do
+  if (classIds.size === 0) {
+    return edges
+  }
+
+  for (const sourceFile of project.getSourceFiles()) {
+    const relativePath = toRelativePath(sourceFile.getFilePath(), projectRoot)
+
+    // Find all NewExpression nodes (new ClassName()) in this file
+    const newExpressions = sourceFile.getDescendantsOfKind(SyntaxKind.NewExpression)
+
+    for (const newExpr of newExpressions) {
+      const line = newExpr.getStartLineNumber()
+
+      // Find the containing function
+      const caller = findContainingFunctionByAncestors(newExpr, projectRoot)
+      if (!caller) continue // Skip if not inside a function
+
+      // Get the expression being instantiated (the class name)
+      const expression = newExpr.getExpression()
+
+      let className: string | null = null
+      let classFilePath: string | null = null
+
+      try {
+        // Try to resolve the class symbol
+        const symbol = expression.getSymbol()
+        if (symbol) {
+          // Follow aliased symbols (imports)
+          const aliasedSymbol = symbol.getAliasedSymbol()
+          const symbolToUse = aliasedSymbol || symbol
+          const declarations = symbolToUse.getDeclarations()
+
+          if (declarations && declarations.length > 0) {
+            const decl = declarations[0]
+            const declSourceFile = decl.getSourceFile()
+            classFilePath = toRelativePath(declSourceFile.getFilePath(), projectRoot)
+            className = symbolToUse.getName()
+          }
+        }
+
+        // Fallback: try to get name from expression text
+        if (!className) {
+          if (Node.isIdentifier(expression)) {
+            className = expression.getText()
+            classFilePath = relativePath // Assume same file if can't resolve
+          }
+        }
+      } catch {
+        // Symbol resolution failed, skip this instantiation
+        continue
+      }
+
+      if (!className || !classFilePath) continue
+
+      const classId = `${classFilePath}:${className}`
+
+      // Only create edge if class is in our symbol map
+      if (!classIds.has(classId)) continue
+
+      // Skip self-references (shouldn't happen, but just in case)
+      if (caller.id === classId) continue
+
+      const edgeId = `${caller.id}->${classId}:class-instantiation`
+
+      // Skip duplicates
+      if (seenEdges.has(edgeId)) continue
+      seenEdges.add(edgeId)
+
+      edges.push({
+        id: edgeId,
+        source: caller.id,
+        target: classId,
+        type: 'class-instantiation',
+        location: {
+          file: relativePath,
+          line
+        }
+      })
+    }
+  }
+
+  return edges
+}
+
+/**
+ * Extract enum usage dependency edges from the project
+ * Detects when functions use enum members (e.g., `Status.Active`, `UserRole.Admin`)
+ * Uses O(n) algorithm - iterates property access expressions and checks against enum symbol set
+ */
+function extractEnumUsageEdges(
+  project: Project,
+  symbolMap: Map<string, ExtractedSymbol>,
+  projectRoot: string
+): DependencyEdge[] {
+  const edges: DependencyEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build a set of enum symbol IDs
+  const enumIds = new Set<string>()
+  for (const [id, symbol] of symbolMap) {
+    if (symbol.kind === 'enum') {
+      enumIds.add(id)
+    }
+  }
+
+  // If no enums, nothing to do
+  if (enumIds.size === 0) {
+    return edges
+  }
+
+  for (const sourceFile of project.getSourceFiles()) {
+    const relativePath = toRelativePath(sourceFile.getFilePath(), projectRoot)
+
+    // Find all identifiers that might reference enums
+    const identifiers = sourceFile.getDescendantsOfKind(SyntaxKind.Identifier)
+
+    for (const identifier of identifiers) {
+      const parent = identifier.getParent()
+      if (!parent) continue
+
+      // Skip if this is part of a declaration or import
+      if (
+        Node.isEnumDeclaration(parent) ||
+        Node.isEnumMember(parent) ||
+        Node.isImportSpecifier(parent) ||
+        Node.isExportSpecifier(parent) ||
+        Node.isTypeReference(parent)
+      ) {
+        continue
+      }
+
+      // Try to resolve the identifier's symbol
+      try {
+        const symbol = identifier.getSymbol()
+        if (!symbol) continue
+
+        // Follow aliased symbols (imports)
+        const aliasedSymbol = symbol.getAliasedSymbol()
+        const symbolToUse = aliasedSymbol || symbol
+        const declarations = symbolToUse.getDeclarations()
+
+        if (!declarations || declarations.length === 0) continue
+
+        const decl = declarations[0]
+
+        // Check if this references an enum
+        if (!Node.isEnumDeclaration(decl)) continue
+
+        const enumName = symbolToUse.getName()
+        const enumFilePath = toRelativePath(decl.getSourceFile().getFilePath(), projectRoot)
+        const enumId = `${enumFilePath}:${enumName}`
+
+        // Check if this is an enum we're tracking
+        if (!enumIds.has(enumId)) continue
+
+        // Find the containing function
+        const caller = findContainingFunctionByAncestors(identifier, projectRoot)
+        if (!caller) continue // Skip if not inside a function
+
+        // Skip self-references (shouldn't happen, but just in case)
+        if (caller.id === enumId) continue
+
+        const edgeId = `${caller.id}->${enumId}:enum-use`
+
+        // Skip duplicates
+        if (seenEdges.has(edgeId)) continue
+        seenEdges.add(edgeId)
+
+        edges.push({
+          id: edgeId,
+          source: caller.id,
+          target: enumId,
+          type: 'enum-use',
+          location: {
+            file: relativePath,
+            line: identifier.getStartLineNumber()
+          }
+        })
+      } catch {
+        // Symbol resolution failed, skip this identifier
+        continue
+      }
     }
   }
 
@@ -571,16 +953,33 @@ export function extractProjectSymbols(
     }
   }
 
-  // Build symbol map for call graph resolution
+  // Build symbol map for dependency resolution
   const symbolMap = buildSymbolMap(fileSymbols)
 
-  // Extract call edges
-  const callEdges = extractCallEdges(project, symbolMap, projectRoot)
+  // Extract function call dependency edges
+  const callDependencyEdges = extractCallDependencyEdges(project, symbolMap, projectRoot)
+
+  // Extract global variable dependency edges
+  const globalVarEdges = extractGlobalVariableEdges(project, symbolMap, projectRoot)
+
+  // Extract class instantiation dependency edges
+  const classInstantiationEdges = extractClassInstantiationEdges(project, symbolMap, projectRoot)
+
+  // Extract enum usage dependency edges
+  const enumUsageEdges = extractEnumUsageEdges(project, symbolMap, projectRoot)
+
+  // Combine all edges
+  const allEdges = [
+    ...callDependencyEdges,
+    ...globalVarEdges,
+    ...classInstantiationEdges,
+    ...enumUsageEdges
+  ]
 
   return {
     projectRoot,
     files: fileSymbols,
-    callEdges,
+    callEdges: allEdges,
     totalSymbols,
     totalFiles: files.length,
     errors
@@ -615,9 +1014,9 @@ export function formatProjectSymbols(result: ProjectSymbols): string {
   }
 
   if (result.callEdges.length > 0) {
-    lines.push('--- Call Graph ---')
+    lines.push('--- Dependency Graph ---')
     for (const edge of result.callEdges) {
-      lines.push(`  ${edge.source} → ${edge.target} (${edge.callSite.file}:${edge.callSite.line})`)
+      lines.push(`  ${edge.source} → ${edge.target} (${edge.location.file}:${edge.location.line})`)
     }
     lines.push('')
   }
