@@ -26,6 +26,16 @@ interface MapIdeAPI {
    * Does not require project path to be set
    */
   scanDirectory: (dirPath: string, options?: ExtractorOptions) => Promise<ProjectSymbols>
+
+  /**
+   * Read specific lines from a file
+   * Used to extract symbol source code for display in the detail panel
+   * @param filePath - Absolute path to the file
+   * @param startLine - Start line number (1-indexed, inclusive)
+   * @param endLine - End line number (1-indexed, inclusive)
+   * @returns The lines of text from startLine to endLine
+   */
+  readFileLines: (filePath: string, startLine: number, endLine: number) => Promise<string>
 }
 
 declare global {

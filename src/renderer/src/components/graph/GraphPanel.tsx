@@ -18,6 +18,8 @@ import {
   isEdgeConnected
 } from '../../store/graphStore'
 import { ZoomLevelIndicator } from './ZoomLevelIndicator'
+import { NodeDetailPanel } from './NodeDetailPanel'
+import type { ExtractedSymbol } from '../../../../preload/index.d'
 
 function GraphCanvas(): React.JSX.Element {
   const rawNodes = useCurrentNodes()
@@ -35,15 +37,53 @@ function GraphCanvas(): React.JSX.Element {
 
   // Track selected nodes for the info panel
   const [selectedNodes, setSelectedNodes] = useState<Node[]>([])
+  // Track if detail panel is open (user can close it even when node is selected)
+  const [detailPanelOpen, setDetailPanelOpen] = useState(false)
 
   const onSelectionChange = useCallback(
     (params: OnSelectionChangeParams) => {
       setSelectedNodes(params.nodes)
       // Update store with selected node IDs for highlighting
       setSelectedNodeIds(params.nodes.map((node) => node.id))
+      // Open detail panel when a node is selected
+      if (params.nodes.length > 0) {
+        setDetailPanelOpen(true)
+      }
     },
     [setSelectedNodeIds]
   )
+
+  // Get the first selected symbol for the detail panel
+  const selectedSymbol: ExtractedSymbol | null = useMemo(() => {
+    if (selectedNodes.length === 0) return null
+    const firstNode = selectedNodes[0]
+    // Symbol is stored in node.data.symbol by symbolsToNodes() in graphStore
+    return (firstNode.data?.symbol as ExtractedSymbol) ?? null
+  }, [selectedNodes])
+
+  // Create a Set of all node IDs in the graph (for checking navigability)
+  const graphNodeIds = useMemo(() => {
+    return new Set(rawNodes.map((node) => node.id))
+  }, [rawNodes])
+
+  // Handle navigation from detail panel (when clicking on a type badge)
+  const handleNavigateToSymbol = useCallback(
+    (symbolId: string) => {
+      // Select the node in the graph
+      setSelectedNodeIds([symbolId])
+      // Update local state
+      const targetNode = rawNodes.find((node) => node.id === symbolId)
+      if (targetNode) {
+        setSelectedNodes([targetNode])
+      }
+    },
+    [rawNodes, setSelectedNodeIds]
+  )
+
+  // Close detail panel handler
+  const handleCloseDetailPanel = useCallback(() => {
+    setDetailPanelOpen(false)
+  }, [])
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
   const nodes = useMemo(() => {
@@ -156,9 +196,19 @@ function GraphCanvas(): React.JSX.Element {
       {/* Zoom level indicator */}
       <ZoomLevelIndicator />
 
+      {/* Node detail panel - shows when a symbol node is selected and panel is open */}
+      {detailPanelOpen && selectedSymbol && (
+        <NodeDetailPanel
+          symbol={selectedSymbol}
+          onClose={handleCloseDetailPanel}
+          graphNodeIds={graphNodeIds}
+          onNavigateToSymbol={handleNavigateToSymbol}
+        />
+      )}
+
       {/* Selection info panel */}
       {selectedNodes.length > 0 && (
-        <div className="absolute bottom-4 left-4 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 backdrop-blur-sm">
+        <div className="absolute bottom-4 left-4 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 backdrop-blur-sm z-0">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
             Selected ({selectedNodes.length})
           </p>

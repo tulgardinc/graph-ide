@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -164,6 +165,31 @@ app.whenReady().then(() => {
       throw error
     }
   })
+
+  /**
+   * Read specific lines from a file
+   * Used to extract symbol source code for display
+   * filePath is relative to the project root (stored in symbols by symbolExtractor)
+   */
+  ipcMain.handle(
+    'file:readLines',
+    async (_, filePath: string, startLine: number, endLine: number) => {
+      try {
+        // filePath is relative to project root, need to make it absolute
+        if (!projectPath) {
+          throw new Error('No project path set. Cannot read file.')
+        }
+        const absolutePath = join(projectPath, filePath)
+        const content = readFileSync(absolutePath, 'utf-8')
+        const lines = content.split('\n')
+        // Lines are 1-indexed, array is 0-indexed
+        return lines.slice(startLine - 1, endLine).join('\n')
+      } catch (error) {
+        console.error('[Main] Failed to read file lines:', error)
+        throw error
+      }
+    }
+  )
 
   // Log project path on startup
   if (projectPath) {

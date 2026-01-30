@@ -2,7 +2,38 @@
 
 ## Current Focus
 
-### Symbol Metadata Extraction (Just Completed)
+### Node Detail Panel (Just Completed - January 30, 2026)
+
+Added a floating detail panel on the left side that displays comprehensive information about selected graph nodes:
+
+**Features:**
+
+- Symbol name and kind as title
+- Return type badge (cyan, clickable if type exists in graph)
+- Parameter badges (slate, showing name and type)
+- Full source code definition using CodeMirror with TypeScript syntax highlighting
+- Markdown-rendered description from JSDoc
+- Close button (X) in top right corner
+- Type navigation: clicking type badges navigates to that symbol if it exists in the graph
+
+**Files Created:**
+
+- `src/renderer/src/components/graph/NodeDetailPanel.tsx` - Main detail panel component
+- `src/renderer/src/components/ui/badge.tsx` - Badge component
+
+**Files Modified:**
+
+- `src/main/index.ts` - Added `file:readLines` IPC handler
+- `src/preload/index.ts` - Exposed `readFileLines` API
+- `src/preload/index.d.ts` - Added type definition
+- `src/renderer/src/components/graph/GraphPanel.tsx` - Integrated NodeDetailPanel
+
+**Dependencies Added:**
+
+- `codemirror`, `@codemirror/lang-javascript`, `@codemirror/theme-one-dark` - Code display
+- `react-markdown` - Description rendering
+
+### Symbol Metadata Extraction (Previously Completed)
 
 Added metadata to each symbol node:
 
@@ -111,6 +142,6 @@ Test files:
 
 ## Next Steps
 
-- Display metadata in UI when node is selected (info panel)
+- ~~Display metadata in UI when node is selected (info panel)~~ ✅ DONE
 - Add type dependency edges (function → parameter types)
 - Consider extracting class methods as individual symbols

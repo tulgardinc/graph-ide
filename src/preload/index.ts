@@ -35,6 +35,14 @@ const api = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scanDirectory: (dirPath: string, options?: any): Promise<any> => {
     return ipcRenderer.invoke('project:scanDir', dirPath, options)
+  },
+
+  /**
+   * Read specific lines from a file
+   * Used to extract symbol source code for display in the detail panel
+   */
+  readFileLines: (filePath: string, startLine: number, endLine: number): Promise<string> => {
+    return ipcRenderer.invoke('file:readLines', filePath, startLine, endLine)
   }
 }
 
