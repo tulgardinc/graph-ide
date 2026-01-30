@@ -19,13 +19,15 @@ import icon from '../../resources/icon.png?asset'
 import { extractProjectSymbols, formatProjectSymbols } from './symbolExtractor'
 import type { ExtractorOptions } from './types'
 import {
-  sendMessageStream,
+  sendMessageWithTools,
   cancelStream,
   initializeClient,
   isClientReady,
   getApiKeyStatus,
   type ChatMessage
 } from './llmClient'
+import { analyzeSemantics, getCachedAnalysis, hasValidAnalysis } from './semanticAnalyzer'
+import { invalidateCache, getCacheInfo } from './cacheManager'
 
 // =============================================================================
 // PROJECT PATH FROM CLI ARGUMENTS
@@ -235,8 +237,9 @@ app.whenReady().then(() => {
   })
 
   /**
-   * Send a chat message and stream the response
+   * Send a chat message and stream the response with tool support
    * Returns immediately, sends chunks via 'chat:chunk' events
+   * Tool execution is notified via 'chat:toolStart' and 'chat:toolEnd' events
    */
   ipcMain.handle(
     'chat:send',
@@ -251,9 +254,20 @@ app.whenReady().then(() => {
     ) => {
       const webContents = event.sender
 
+      // Require project path for tool calling
+      if (!projectPath) {
+        webContents.send('chat:error', 'No project path set. Cannot use tools.')
+        return { success: false, error: 'No project path set' }
+      }
+
+      const currentProjectPath = projectPath // Capture for closure
+
       return new Promise<{ success: boolean; error?: string }>((resolve) => {
-        sendMessageStream(
-          options,
+        sendMessageWithTools(
+          {
+            ...options,
+            projectPath: currentProjectPath
+          },
           // On chunk
           (chunk) => {
             webContents.send('chat:chunk', chunk)
@@ -267,6 +281,14 @@ app.whenReady().then(() => {
           (fullResponse) => {
             webContents.send('chat:complete', fullResponse)
             resolve({ success: true })
+          },
+          // On tool start
+          (toolName, description) => {
+            webContents.send('chat:toolStart', { toolName, description })
+          },
+          // On tool end
+          (toolName, status) => {
+            webContents.send('chat:toolEnd', { toolName, status })
           }
         )
       })
@@ -278,6 +300,104 @@ app.whenReady().then(() => {
    */
   ipcMain.handle('chat:cancel', () => {
     return cancelStream()
+  })
+
+  // =============================================================================
+  // IPC HANDLERS FOR SEMANTIC ANALYSIS
+  // =============================================================================
+
+  /**
+   * Run semantic analysis on the project
+   * Uses LLM with tool calling to explore and categorize the codebase
+   * Caches results in .graph-ide/ directory
+   */
+  ipcMain.handle('semantic:analyze', async (event, forceRefresh?: boolean) => {
+    const webContents = event.sender
+
+    if (!projectPath) {
+      return {
+        success: false,
+        error: 'No project path set. Cannot analyze.'
+      }
+    }
+
+    const currentProjectPath = projectPath
+
+    console.log('[Main] Starting semantic analysis for:', currentProjectPath)
+
+    try {
+      const result = await analyzeSemantics({
+        projectPath: currentProjectPath,
+        forceRefresh,
+        onProgress: (status) => {
+          webContents.send('semantic:progress', status)
+        },
+        onToolStart: (toolName, description) => {
+          webContents.send('semantic:toolStart', { toolName, description })
+        },
+        onToolEnd: (toolName, result) => {
+          webContents.send('semantic:toolEnd', { toolName, result })
+        }
+      })
+
+      return result
+    } catch (error) {
+      console.error('[Main] Semantic analysis failed:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  /**
+   * Get cached semantic analysis (fast, no LLM call)
+   */
+  ipcMain.handle('semantic:getCached', async () => {
+    if (!projectPath) {
+      return null
+    }
+
+    return await getCachedAnalysis(projectPath)
+  })
+
+  /**
+   * Check if valid semantic analysis cache exists
+   */
+  ipcMain.handle('semantic:hasValid', async () => {
+    if (!projectPath) {
+      return false
+    }
+
+    return await hasValidAnalysis(projectPath)
+  })
+
+  /**
+   * Invalidate (delete) the semantic analysis cache
+   */
+  ipcMain.handle('semantic:invalidate', async () => {
+    if (!projectPath) {
+      return false
+    }
+
+    await invalidateCache(projectPath)
+    return true
+  })
+
+  /**
+   * Get cache info for debugging/UI
+   */
+  ipcMain.handle('semantic:cacheInfo', async () => {
+    if (!projectPath) {
+      return {
+        exists: false,
+        valid: false,
+        lastUpdated: null,
+        fileCount: 0
+      }
+    }
+
+    return await getCacheInfo(projectPath)
   })
 
   // Initialize LLM client with env var (dotenv has loaded by now)

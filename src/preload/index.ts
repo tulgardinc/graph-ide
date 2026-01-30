@@ -120,6 +120,130 @@ const api = {
     }
     ipcRenderer.on('chat:complete', handler)
     return () => ipcRenderer.removeListener('chat:complete', handler)
+  },
+
+  /**
+   * Subscribe to tool start events
+   * Called when Claude starts executing a tool
+   */
+  onToolStart: (
+    callback: (data: { toolName: string; description: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { toolName: string; description: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('chat:toolStart', handler)
+    return () => ipcRenderer.removeListener('chat:toolStart', handler)
+  },
+
+  /**
+   * Subscribe to tool end events
+   * Called when a tool execution completes
+   */
+  onToolEnd: (callback: (data: { toolName: string; status: string }) => void): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { toolName: string; status: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('chat:toolEnd', handler)
+    return () => ipcRenderer.removeListener('chat:toolEnd', handler)
+  },
+
+  // ==========================================================================
+  // Semantic Analysis API
+  // ==========================================================================
+
+  /**
+   * Run semantic analysis on the project
+   * Uses LLM with tool calling to explore and categorize the codebase
+   * Results are cached in .graph-ide/ directory
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  semanticAnalyze: (forceRefresh?: boolean): Promise<any> => {
+    return ipcRenderer.invoke('semantic:analyze', forceRefresh)
+  },
+
+  /**
+   * Get cached semantic analysis (fast, no LLM call)
+   * Returns null if no valid cache exists
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  semanticGetCached: (): Promise<any> => {
+    return ipcRenderer.invoke('semantic:getCached')
+  },
+
+  /**
+   * Check if valid semantic analysis cache exists
+   */
+  semanticHasValid: (): Promise<boolean> => {
+    return ipcRenderer.invoke('semantic:hasValid')
+  },
+
+  /**
+   * Invalidate (delete) the semantic analysis cache
+   */
+  semanticInvalidate: (): Promise<boolean> => {
+    return ipcRenderer.invoke('semantic:invalidate')
+  },
+
+  /**
+   * Get cache info for debugging/UI
+   */
+  semanticCacheInfo: (): Promise<{
+    exists: boolean
+    valid: boolean
+    lastUpdated: string | null
+    fileCount: number
+  }> => {
+    return ipcRenderer.invoke('semantic:cacheInfo')
+  },
+
+  /**
+   * Subscribe to semantic analysis progress events
+   */
+  onSemanticProgress: (callback: (status: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: string): void => {
+      callback(status)
+    }
+    ipcRenderer.on('semantic:progress', handler)
+    return () => ipcRenderer.removeListener('semantic:progress', handler)
+  },
+
+  /**
+   * Subscribe to semantic tool start events
+   */
+  onSemanticToolStart: (
+    callback: (data: { toolName: string; description: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { toolName: string; description: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('semantic:toolStart', handler)
+    return () => ipcRenderer.removeListener('semantic:toolStart', handler)
+  },
+
+  /**
+   * Subscribe to semantic tool end events
+   */
+  onSemanticToolEnd: (
+    callback: (data: { toolName: string; result: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { toolName: string; result: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('semantic:toolEnd', handler)
+    return () => ipcRenderer.removeListener('semantic:toolEnd', handler)
   }
 }
 

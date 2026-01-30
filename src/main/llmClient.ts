@@ -1,8 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk'
+import type {
+  MessageParam,
+  ContentBlockParam,
+  ToolResultBlockParam,
+  ToolUseBlock
+} from '@anthropic-ai/sdk/resources/messages'
+import { tools, executeToolCall, getToolDescription } from './tools'
 
 // =============================================================================
 // LLM CLIENT MODULE
-// Handles interaction with Anthropic Claude API
+// Handles interaction with Anthropic Claude API with tool calling support
 // =============================================================================
 
 /** Message format for chat history */
@@ -10,6 +17,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
+
+/** Tool execution callback - called when a tool starts/ends */
+export type ToolCallback = (toolName: string, description: string) => void
 
 /** Options for sending a message */
 export interface SendMessageOptions {
@@ -184,6 +194,186 @@ export function cancelStream(): boolean {
     return true
   }
   return false
+}
+
+// =============================================================================
+// TOOL-ENABLED STREAMING (AGENTIC LOOP)
+// =============================================================================
+
+/** Options for sending a message with tools */
+export interface SendMessageWithToolsOptions extends SendMessageOptions {
+  projectPath: string
+}
+
+/**
+ * Send a message with tool calling support
+ * Implements an agentic loop: Claude can call tools, get results, and continue
+ *
+ * Flow:
+ * 1. Send message with tools available
+ * 2. If Claude responds with tool_use, execute the tool
+ * 3. Send tool_result back to Claude
+ * 4. Repeat until Claude responds with end_turn (final text response)
+ */
+export async function sendMessageWithTools(
+  options: SendMessageWithToolsOptions,
+  onChunk: StreamCallback,
+  onError: ErrorCallback,
+  onComplete: CompleteCallback,
+  onToolStart?: ToolCallback,
+  onToolEnd?: ToolCallback
+): Promise<void> {
+  if (!client) {
+    onError(new Error('Anthropic client not initialized. Set ANTHROPIC_API_KEY.'))
+    return
+  }
+
+  const {
+    messages,
+    model = DEFAULT_MODEL,
+    maxTokens = DEFAULT_MAX_TOKENS,
+    systemPrompt,
+    projectPath
+  } = options
+
+  // Convert initial messages to Anthropic format
+  const anthropicMessages: MessageParam[] = messages.map((msg) => ({
+    role: msg.role as 'user' | 'assistant',
+    content: msg.content
+  }))
+
+  // Create abort controller for cancellation
+  activeAbortController = new AbortController()
+
+  let fullResponse = ''
+  let iterationCount = 0
+  const MAX_ITERATIONS = 10 // Prevent infinite loops
+
+  try {
+    while (iterationCount < MAX_ITERATIONS) {
+      iterationCount++
+      console.log(`[LLM] Tool loop iteration ${iterationCount}`)
+
+      // Check for cancellation
+      if (activeAbortController?.signal.aborted) {
+        console.log('[LLM] Cancelled during tool loop')
+        break
+      }
+
+      // Make the API call with streaming
+      const stream = client.messages.stream(
+        {
+          model,
+          max_tokens: maxTokens,
+          messages: anthropicMessages,
+          tools,
+          ...(systemPrompt ? { system: systemPrompt } : {})
+        },
+        {
+          signal: activeAbortController.signal
+        }
+      )
+
+      // Collect content blocks from the stream
+      let currentTextContent = ''
+      const toolUseBlocks: ToolUseBlock[] = []
+
+      // Handle streaming text
+      stream.on('text', (text) => {
+        currentTextContent += text
+        fullResponse += text
+        onChunk(text)
+      })
+
+      // Wait for the final message
+      const finalMessage = await stream.finalMessage()
+
+      console.log('[LLM] Stop reason:', finalMessage.stop_reason)
+
+      // Collect any tool_use blocks from the response
+      for (const block of finalMessage.content) {
+        if (block.type === 'tool_use') {
+          toolUseBlocks.push(block)
+        }
+      }
+
+      // If no tool calls, we're done
+      if (finalMessage.stop_reason === 'end_turn' || toolUseBlocks.length === 0) {
+        console.log('[LLM] Conversation complete (no more tool calls)')
+        break
+      }
+
+      // Handle tool calls
+      if (finalMessage.stop_reason === 'tool_use' && toolUseBlocks.length > 0) {
+        // Add assistant's response to conversation history
+        anthropicMessages.push({
+          role: 'assistant',
+          content: finalMessage.content as ContentBlockParam[]
+        })
+
+        // Execute each tool and collect results
+        const toolResults: ToolResultBlockParam[] = []
+
+        for (const toolUse of toolUseBlocks) {
+          const toolInput = toolUse.input as Record<string, unknown>
+          const description = getToolDescription(toolUse.name, toolInput)
+
+          // Notify UI that tool is starting
+          if (onToolStart) {
+            onToolStart(toolUse.name, description)
+          }
+
+          console.log(`[LLM] Executing tool: ${toolUse.name}`, toolInput)
+
+          // Execute the tool
+          const result = await executeToolCall(toolUse.name, toolInput, projectPath)
+
+          console.log(`[LLM] Tool result success: ${result.success}`)
+
+          // Notify UI that tool finished
+          if (onToolEnd) {
+            onToolEnd(toolUse.name, result.success ? 'completed' : `error: ${result.error}`)
+          }
+
+          // Add tool result
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: result.success ? result.result || 'Success' : `Error: ${result.error}`
+          })
+        }
+
+        // Add tool results as user message
+        anthropicMessages.push({
+          role: 'user',
+          content: toolResults
+        })
+
+        // Continue the loop to get Claude's next response
+        continue
+      }
+
+      // If we get here with an unexpected stop reason, break
+      console.log('[LLM] Unexpected stop reason, ending loop')
+      break
+    }
+
+    if (iterationCount >= MAX_ITERATIONS) {
+      console.warn('[LLM] Max iterations reached in tool loop')
+    }
+
+    onComplete(fullResponse)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.log('[LLM] Stream cancelled by user')
+      onComplete(fullResponse) // Return what we have so far
+    } else {
+      console.error('[LLM] Error in tool loop:', error)
+      onError(error instanceof Error ? error : new Error(String(error)))
+    }
+  } finally {
+    activeAbortController = null
+  }
 }
 
 // NOTE: Do not auto-initialize here - call initializeClient() explicitly

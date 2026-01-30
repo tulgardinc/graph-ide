@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { Resizable } from 're-resizable'
 import { Card, CardHeader, CardTitle, CardContent } from '@renderer/components/ui/card'
@@ -6,11 +6,10 @@ import { Button } from '@renderer/components/ui/button'
 import { Badge } from '@renderer/components/ui/badge'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import Markdown from 'react-markdown'
-import { EditorView, basicSetup } from 'codemirror'
+import CodeMirror from '@uiw/react-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { EditorState } from '@codemirror/state'
-import { lineNumbers } from '@codemirror/view'
+import { EditorView, lineNumbers } from '@codemirror/view'
 import type { ExtractedSymbol } from '../../../../preload/index.d'
 
 interface NodeDetailPanelProps {
@@ -34,8 +33,6 @@ export function NodeDetailPanel({
   const [sourceCode, setSourceCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const editorRef = useRef<HTMLDivElement>(null)
-  const editorViewRef = useRef<EditorView | null>(null)
 
   // Load source code from file
   useEffect(() => {
@@ -59,48 +56,25 @@ export function NodeDetailPanel({
     loadSourceCode()
   }, [symbol.filePath, symbol.startLine, symbol.endLine])
 
-  // Initialize CodeMirror editor
-  useEffect(() => {
-    if (!editorRef.current || sourceCode === null) return
-
-    // Clean up previous editor
-    if (editorViewRef.current) {
-      editorViewRef.current.destroy()
-      editorViewRef.current = null
-    }
-
-    // Calculate line number offset - CodeMirror shows lines 1-based internally,
-    // but we want to show actual file line numbers
+  // CodeMirror extensions with custom line numbers (offset to show actual file line numbers)
+  const extensions = useMemo(() => {
     const lineOffset = symbol.startLine - 1
-
-    const state = EditorState.create({
-      doc: sourceCode,
-      extensions: [
-        basicSetup,
-        javascript({ typescript: true, jsx: true }),
-        oneDark,
-        EditorView.editable.of(false),
-        EditorView.lineWrapping,
-        EditorState.readOnly.of(true),
-        // Override line numbers to show actual file line numbers
-        lineNumbers({
-          formatNumber: (lineNo) => String(lineNo + lineOffset)
-        })
-      ]
-    })
-
-    editorViewRef.current = new EditorView({
-      state,
-      parent: editorRef.current
-    })
-
-    return () => {
-      if (editorViewRef.current) {
-        editorViewRef.current.destroy()
-        editorViewRef.current = null
-      }
-    }
-  }, [sourceCode, symbol.startLine])
+    return [
+      javascript({ typescript: true, jsx: true }),
+      EditorView.editable.of(false),
+      EditorView.lineWrapping,
+      lineNumbers({
+        formatNumber: (lineNo) => String(lineNo + lineOffset)
+      }),
+      EditorView.theme({
+        '&': { fontSize: '13px' },
+        '.cm-gutters': {
+          backgroundColor: 'rgb(15 23 42)', // slate-900
+          borderRight: '1px solid rgb(51 65 85)' // slate-700
+        }
+      })
+    ]
+  }, [symbol.startLine])
 
   // Handle type badge click
   const handleTypeBadgeClick = useCallback(
@@ -216,11 +190,15 @@ export function NodeDetailPanel({
                       </div>
                     )}
                     {error && <div className="p-4 text-sm text-red-400">Error: {error}</div>}
-                    {!loading && !error && (
-                      <div
-                        ref={editorRef}
-                        className="max-h-[500px] overflow-auto text-sm [&_.cm-editor]:bg-transparent [&_.cm-gutters]:bg-slate-900 [&_.cm-gutters]:border-r-slate-700"
-                      />
+                    {!loading && !error && sourceCode && (
+                      <div className="max-h-[500px] overflow-auto">
+                        <CodeMirror
+                          value={sourceCode}
+                          theme={oneDark}
+                          extensions={extensions}
+                          basicSetup={false}
+                        />
+                      </div>
                     )}
                   </div>
                   <div className="text-xs text-slate-500">

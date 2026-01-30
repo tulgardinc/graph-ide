@@ -6,6 +6,9 @@ out
 *.log*
 react-flow-docs/
 
+# Semantic analysis cache (LLM-generated, project-specific)
+.graph-ide/
+
 # Environment variables (contains API keys)
 .env
 .env.local

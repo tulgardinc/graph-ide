@@ -1,5 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
-import type { ProjectSymbols, ExtractorOptions } from '../main/types'
+import type { ProjectSymbols, ExtractorOptions, SemanticAnalysis } from '../main/types'
 
 /**
  * Chat message format for LLM API
@@ -26,6 +26,26 @@ export interface ChatSendOptions {
   model?: string
   maxTokens?: number
   systemPrompt?: string
+}
+
+/**
+ * Result from semantic analysis
+ */
+export interface SemanticAnalysisResult {
+  success: boolean
+  analysis?: SemanticAnalysis
+  error?: string
+  cached?: boolean
+}
+
+/**
+ * Cache info for semantic analysis
+ */
+export interface SemanticCacheInfo {
+  exists: boolean
+  valid: boolean
+  lastUpdated: string | null
+  fileCount: number
 }
 
 /**
@@ -106,6 +126,72 @@ interface MapIdeAPI {
    * Returns an unsubscribe function
    */
   onChatComplete: (callback: (fullResponse: string) => void) => () => void
+
+  /**
+   * Subscribe to tool start events
+   * Called when Claude starts executing a tool
+   * Returns an unsubscribe function
+   */
+  onToolStart: (callback: (data: { toolName: string; description: string }) => void) => () => void
+
+  /**
+   * Subscribe to tool end events
+   * Called when a tool execution completes
+   * Returns an unsubscribe function
+   */
+  onToolEnd: (callback: (data: { toolName: string; status: string }) => void) => () => void
+
+  // ==========================================================================
+  // Semantic Analysis API
+  // ==========================================================================
+
+  /**
+   * Run semantic analysis on the project
+   * Uses LLM with tool calling to explore and categorize the codebase
+   * Results are cached in .graph-ide/ directory
+   */
+  semanticAnalyze: (forceRefresh?: boolean) => Promise<SemanticAnalysisResult>
+
+  /**
+   * Get cached semantic analysis (fast, no LLM call)
+   * Returns null if no valid cache exists
+   */
+  semanticGetCached: () => Promise<SemanticAnalysis | null>
+
+  /**
+   * Check if valid semantic analysis cache exists
+   */
+  semanticHasValid: () => Promise<boolean>
+
+  /**
+   * Invalidate (delete) the semantic analysis cache
+   */
+  semanticInvalidate: () => Promise<boolean>
+
+  /**
+   * Get cache info for debugging/UI
+   */
+  semanticCacheInfo: () => Promise<SemanticCacheInfo>
+
+  /**
+   * Subscribe to semantic analysis progress events
+   * Returns an unsubscribe function
+   */
+  onSemanticProgress: (callback: (status: string) => void) => () => void
+
+  /**
+   * Subscribe to semantic tool start events
+   * Returns an unsubscribe function
+   */
+  onSemanticToolStart: (
+    callback: (data: { toolName: string; description: string }) => void
+  ) => () => void
+
+  /**
+   * Subscribe to semantic tool end events
+   * Returns an unsubscribe function
+   */
+  onSemanticToolEnd: (callback: (data: { toolName: string; result: string }) => void) => () => void
 }
 
 declare global {
@@ -116,7 +202,7 @@ declare global {
 }
 
 // Re-export types for convenience in renderer
-export type { ProjectSymbols, ExtractorOptions, MapIdeAPI }
+export type { ProjectSymbols, ExtractorOptions, MapIdeAPI, SemanticAnalysis }
 export type {
   ExtractedSymbol,
   FileSymbols,
@@ -124,5 +210,11 @@ export type {
   FileParseError,
   CallEdge,
   EdgeType,
-  ParameterInfo
+  ParameterInfo,
+  SemanticNode,
+  SystemNode,
+  DomainNode,
+  ModuleNode,
+  SemanticEdge,
+  SemanticLayer
 } from '../main/types'

@@ -1,5 +1,4 @@
-import * as path from 'path'
-import { Project, SourceFile, Node, SyntaxKind, ts } from 'ts-morph'
+import { Project, SourceFile, Node, SyntaxKind } from 'ts-morph'
 import { walkDirectory, toRelativePath } from './fileWalker'
 import type {
   ExtractedSymbol,
@@ -9,15 +8,12 @@ import type {
   ProjectSymbols,
   SymbolKind,
   DependencyEdge,
-  EdgeType,
   ParameterInfo
 } from './types'
 
 // =============================================================================
 // TS-MORPH PROJECT SETUP
 // =============================================================================
-
-import * as fs from 'fs'
 
 /**
  * Create a ts-morph Project for analyzing TypeScript files

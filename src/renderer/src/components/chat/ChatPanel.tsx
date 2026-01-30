@@ -1,15 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { MessageSquare, AlertCircle } from 'lucide-react'
+import { MessageSquare, AlertCircle, Search, FileText, FolderTree, Loader2 } from 'lucide-react'
 import { Resizable } from 're-resizable'
 import { Card, CardHeader, CardTitle, CardContent } from '@renderer/components/ui/card'
 import { MessageList, type Message } from './MessageList'
 import { Composer } from './Composer'
+
+/** Tool execution status for UI feedback */
+interface ToolStatus {
+  toolName: string
+  description: string
+}
 
 export function ChatPanel(): React.JSX.Element {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isReady, setIsReady] = useState(false)
+  const [activeTool, setActiveTool] = useState<ToolStatus | null>(null)
   const streamingMessageRef = useRef<string>('')
   const streamingMessageIdRef = useRef<string | null>(null)
 
@@ -54,14 +61,41 @@ export function ChatPanel(): React.JSX.Element {
 
     const unsubComplete = window.api.onChatComplete(() => {
       setIsLoading(false)
+      setActiveTool(null)
       streamingMessageIdRef.current = null
       streamingMessageRef.current = ''
+    })
+
+    // Tool execution events - embed tool calls into the response stream
+    const unsubToolStart = window.api.onToolStart((data) => {
+      console.log('[Chat] Tool started:', data)
+      setActiveTool({ toolName: data.toolName, description: data.description })
+
+      // Append tool call indicator to the streaming message
+      const toolMarker = `\n\n> 🔧 **${data.description}**...\n\n`
+      streamingMessageRef.current += toolMarker
+      if (streamingMessageIdRef.current) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === streamingMessageIdRef.current
+              ? { ...msg, content: streamingMessageRef.current }
+              : msg
+          )
+        )
+      }
+    })
+
+    const unsubToolEnd = window.api.onToolEnd((data) => {
+      console.log('[Chat] Tool ended:', data)
+      setActiveTool(null)
     })
 
     return () => {
       unsubChunk()
       unsubError()
       unsubComplete()
+      unsubToolStart()
+      unsubToolEnd()
     }
   }, [])
 
@@ -104,8 +138,39 @@ export function ChatPanel(): React.JSX.Element {
       try {
         const result = await window.api.chatSend({
           messages: chatMessages,
-          systemPrompt:
-            'You are a helpful coding assistant. You help developers understand and work with their codebase. Be concise and technical in your responses.'
+          systemPrompt: `You are an expert software engineer assistant with direct access to the user's codebase. Your role is to help developers understand, navigate, and improve their code.
+
+## Your Capabilities
+
+You have access to three powerful tools to interact with the codebase:
+
+1. **list_files** - Get the file tree structure with line counts. Use this FIRST when you need to understand the project structure or find where code lives.
+
+2. **search_codebase** - Search for text patterns using ripgrep. Use this to find:
+   - Function/class definitions
+   - Symbol usages and references
+   - Import statements
+   - Specific code patterns or text
+
+3. **read_file** - Read file contents (full or specific line ranges). Use this to examine implementations, understand code flow, or get context.
+
+## Guidelines
+
+- **Explore first**: When asked about the codebase, start by listing files or searching to understand the structure before making assumptions.
+- **Use tools proactively**: Don't hesitate to use multiple tools to gather context. It's better to have complete information.
+- **Be specific with searches**: Use targeted patterns to find relevant code quickly.
+- **Reference actual code**: When explaining, refer to specific files and line numbers you've seen.
+- **Be concise but thorough**: Give clear, actionable answers backed by what you found in the codebase.
+- **Suggest improvements**: When you spot potential issues or improvements, point them out.
+
+## Response Style
+
+- Use code blocks 
+- Reference file paths and line numbers when discussing code
+- Explain your reasoning when analyzing code
+- Provide complete, working solutions when helping with coding tasks
+
+You are working within a specific project directory. All file paths are relative to the project root.`
         })
 
         if (!result.success && result.error) {
@@ -168,6 +233,21 @@ export function ChatPanel(): React.JSX.Element {
               </div>
             )}
             <MessageList messages={messages} />
+            {activeTool && (
+              <div className="px-4 py-2 bg-cyan-500/10 border-t border-cyan-500/20 flex items-center gap-2">
+                {activeTool.toolName === 'search_codebase' ? (
+                  <Search className="h-4 w-4 text-cyan-400" />
+                ) : activeTool.toolName === 'read_file' ? (
+                  <FileText className="h-4 w-4 text-cyan-400" />
+                ) : activeTool.toolName === 'list_files' ? (
+                  <FolderTree className="h-4 w-4 text-cyan-400" />
+                ) : (
+                  <Loader2 className="h-4 w-4 text-cyan-400 animate-spin" />
+                )}
+                <span className="text-xs text-cyan-300">{activeTool.description}</span>
+                <Loader2 className="h-3 w-3 text-cyan-400 animate-spin ml-auto" />
+              </div>
+            )}
             <Composer
               onSendMessage={handleSendMessage}
               onCancel={handleCancel}
