@@ -21,6 +21,11 @@ interface NodeDetailPanelProps {
   onNavigateToSymbol?: (symbolId: string) => void
   /** Callback when panel is resized */
   onResize?: (width: number) => void
+  /** The construct/module this symbol belongs to (if classified) */
+  constructInfo?: {
+    id: string
+    name: string
+  }
 }
 
 export function NodeDetailPanel({
@@ -28,7 +33,8 @@ export function NodeDetailPanel({
   onClose,
   graphNodeIds,
   onNavigateToSymbol,
-  onResize
+  onResize,
+  constructInfo
 }: NodeDetailPanelProps): React.JSX.Element {
   const [sourceCode, setSourceCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -123,7 +129,27 @@ export function NodeDetailPanel({
             >
               {symbol.name}
             </CardTitle>
-            <span className="text-xs text-slate-400 mt-1">{symbol.kind}</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-400">{symbol.kind}</span>
+              {constructInfo && (
+                <>
+                  <span className="text-xs text-slate-600">•</span>
+                  <Badge
+                    variant="outline"
+                    className="text-xs bg-purple-500/20 text-purple-300 border-purple-500/40 px-2 py-0"
+                    title={`Belongs to construct: ${constructInfo.id}`}
+                  >
+                    🧩 {constructInfo.name}
+                  </Badge>
+                </>
+              )}
+              {!constructInfo && (
+                <>
+                  <span className="text-xs text-slate-600">•</span>
+                  <span className="text-xs text-slate-500 italic">Unclassified</span>
+                </>
+              )}
+            </div>
             {/* Close button */}
             <Button
               variant="ghost"

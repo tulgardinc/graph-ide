@@ -17,6 +17,8 @@ export interface SemanticNode {
   description: string
   /** Which layer this node belongs to */
   layer: SemanticLayer
+  /** ID of the parent node (for border color inheritance) */
+  parentId?: string
   /** IDs of child nodes (lower layer or symbols for modules) */
   children: string[]
   /** Optional metadata */
@@ -31,13 +33,43 @@ export interface SemanticNode {
 }
 
 /**
+ * Mapping configuration for what code belongs to a construct/module
+ * Uses an inheritance system: directory → file → symbol (with cascading overrides)
+ */
+export interface ConstructMapping {
+  /**
+   * Directory patterns mapped to this construct
+   * - Use * for direct children only (e.g., "src/api/*" matches files in src/api/ but not subdirs)
+   * - Use ** for recursive (e.g., "src/api/**" matches all files under src/api/)
+   */
+  directories?: string[]
+  /**
+   * Specific files mapped to this construct
+   * Overrides any parent directory mapping
+   */
+  files?: string[]
+  /**
+   * Specific symbols mapped to this construct (format: "filePath:symbolName")
+   * Overrides any file/directory mapping for these specific symbols
+   */
+  symbols?: string[]
+}
+
+/**
  * Module node (Layer 3) - Groups of related symbols
  * Example: "Authentication Module", "API Client Module"
  */
 export interface ModuleNode extends SemanticNode {
   layer: 'module'
-  /** Symbol IDs that belong to this module (filePath:name format) */
+  /**
+   * @deprecated Use mappings instead. Symbol IDs for backwards compatibility.
+   */
   children: string[]
+  /**
+   * New mapping system for construct-to-symbol relationships
+   * Supports directory, file, and symbol-level granularity
+   */
+  mappings?: ConstructMapping
 }
 
 /**

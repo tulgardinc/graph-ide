@@ -216,5 +216,6 @@ export type {
   DomainNode,
   ModuleNode,
   SemanticEdge,
-  SemanticLayer
+  SemanticLayer,
+  ConstructMapping
 } from '../main/types'

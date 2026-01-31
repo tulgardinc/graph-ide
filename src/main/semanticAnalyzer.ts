@@ -35,7 +35,7 @@ const SEMANTIC_ANALYSIS_SYSTEM_PROMPT = `You are a code architecture analyst. Yo
 2. **Identify systems**: Look at top-level directories to identify major architectural components
 3. **Explore domains**: Examine subdirectories and their purposes
 4. **Identify modules**: Use get_file_symbols to understand what files export, and group related functionality
-5. **Only read files** when you need to understand ambiguous code
+5. **Only read files** when you need to understand ambiguous code or import patterns
 
 ## Guidelines
 
@@ -47,6 +47,25 @@ const SEMANTIC_ANALYSIS_SYSTEM_PROMPT = `You are a code architecture analyst. Yo
 - Use kebab-case for IDs (e.g., "module:user-auth", "domain:payment-processing")
 - Keep descriptions concise (1-2 sentences)
 - Focus on WHAT code does, not HOW it's implemented
+
+## Module Mapping Strategy (IMPORTANT)
+
+For modules, use an **inheritance-based mapping system** with three levels of specificity:
+
+1. **Directory-level** (most common): Map entire directories to a module
+   - Use \`*\` for direct children only: "src/api/*" matches files in src/api/ but NOT subdirectories
+   - Use \`**\` for recursive: "src/api/**" matches all files under src/api/ including subdirectories
+
+2. **File-level** (when needed): Override the directory mapping for specific files
+   - Use when a file doesn't fit its parent directory's module assignment
+
+3. **Symbol-level** (exception case): Override for individual symbols
+   - Use when a specific function/class in a file belongs to a different module than the rest of the file
+   - This happens when you notice cross-module imports that don't fit the directory structure
+
+**Example scenario**: If \`src/utils/validators.ts\` mostly contains validation logic but also exports \`formatApiUrl()\` which is clearly HTTP-related:
+- Assign "src/utils/**" to \`module:validation\`
+- Assign symbol "src/utils/validators.ts:formatApiUrl" to \`module:http-client\`
 
 ## Output Format
 
@@ -72,6 +91,7 @@ After exploring the codebase, you MUST output ONLY a valid JSON object with no a
       "name": "Human Readable Name",
       "description": "Business capability this domain provides",
       "layer": "domain",
+      "parentId": "system:parent-system-id",
       "children": ["module:child-module-id"],
       "metadata": {
         "keywords": ["keyword1"]
@@ -84,9 +104,14 @@ After exploring the codebase, you MUST output ONLY a valid JSON object with no a
       "name": "Human Readable Name",
       "description": "What this module does",
       "layer": "module",
-      "children": ["path/to/file.ts:SymbolName", "path/to/file.ts:AnotherSymbol"],
+      "parentId": "domain:parent-domain-id",
+      "children": [],
+      "mappings": {
+        "directories": ["src/auth/**", "src/login/*"],
+        "files": ["src/utils/authHelpers.ts"],
+        "symbols": ["src/utils/validators.ts:validateToken"]
+      },
       "metadata": {
-        "filePatterns": ["src/auth/*"],
         "keywords": ["authentication", "login"]
       }
     }
@@ -101,7 +126,14 @@ After exploring the codebase, you MUST output ONLY a valid JSON object with no a
   ]
 }
 
-Edge types:
+### Mapping Rules:
+- **directories**: Use glob patterns. \`*\` = direct children, \`**\` = recursive
+- **files**: Specific file paths that override their directory's assignment
+- **symbols**: Specific symbol IDs (format: "filePath:symbolName") that override their file's assignment
+- Prefer directory mappings when possible (cheaper to evaluate)
+- Only use symbol-level when you detect cross-module usage during analysis
+
+### Edge types:
 - "contains": Parent contains child (implicit from children arrays)
 - "depends-on": One component uses/imports from another
 - "communicates-with": Components interact at runtime (API calls, events)
@@ -304,18 +336,20 @@ Begin your exploration now.`
           messages: [{ role: 'user', content: initialMessage }],
           systemPrompt: SEMANTIC_ANALYSIS_SYSTEM_PROMPT,
           projectPath,
-          maxTokens: 8192 // Larger for JSON output
+          maxTokens: 8192, // Larger for JSON output
+          finalResponseOnly: true // Only capture the final JSON response, not intermediate tool-calling text
         },
-        // onChunk - collect the response
-        (chunk) => {
-          fullResponse += chunk
+        // onChunk - don't accumulate here, we'll get filtered response from onComplete
+        () => {
+          // Intentionally empty - we use onComplete to get the filtered final response
         },
         // onError
         (error) => {
           reject(error)
         },
-        // onComplete
-        () => {
+        // onComplete - receive the filtered final response (only last iteration when finalResponseOnly=true)
+        (response) => {
+          fullResponse = response
           resolve()
         },
         // onToolStart

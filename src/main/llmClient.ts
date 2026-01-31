@@ -120,6 +120,10 @@ export async function sendMessageStream(
         model,
         max_tokens: maxTokens,
         messages: anthropicMessages,
+        thinking: {
+          type: 'enabled',
+          budget_tokens: 1024
+        },
         ...(systemPrompt ? { system: systemPrompt } : {})
       },
       {
@@ -175,6 +179,10 @@ export async function sendMessage(options: SendMessageOptions): Promise<string> 
     model,
     max_tokens: maxTokens,
     messages: anthropicMessages,
+    thinking: {
+      type: 'enabled',
+      budget_tokens: 1024
+    },
     ...(systemPrompt ? { system: systemPrompt } : {})
   })
 
@@ -203,6 +211,8 @@ export function cancelStream(): boolean {
 /** Options for sending a message with tools */
 export interface SendMessageWithToolsOptions extends SendMessageOptions {
   projectPath: string
+  /** If true, only return text from the final response (not intermediate tool-calling iterations) */
+  finalResponseOnly?: boolean
 }
 
 /**
@@ -233,7 +243,8 @@ export async function sendMessageWithTools(
     model = DEFAULT_MODEL,
     maxTokens = DEFAULT_MAX_TOKENS,
     systemPrompt,
-    projectPath
+    projectPath,
+    finalResponseOnly = false
   } = options
 
   // Convert initial messages to Anthropic format
@@ -246,6 +257,7 @@ export async function sendMessageWithTools(
   activeAbortController = new AbortController()
 
   let fullResponse = ''
+  let currentIterationText = '' // Track text for current iteration only
   let iterationCount = 0
   const MAX_ITERATIONS = 10 // Prevent infinite loops
 
@@ -267,6 +279,10 @@ export async function sendMessageWithTools(
           max_tokens: maxTokens,
           messages: anthropicMessages,
           tools,
+          thinking: {
+            type: 'enabled',
+            budget_tokens: 1024
+          },
           ...(systemPrompt ? { system: systemPrompt } : {})
         },
         {
@@ -274,14 +290,18 @@ export async function sendMessageWithTools(
         }
       )
 
-      // Collect content blocks from the stream
-      let currentTextContent = ''
+      // Reset current iteration text at the start of each iteration
+      currentIterationText = ''
       const toolUseBlocks: ToolUseBlock[] = []
 
       // Handle streaming text
       stream.on('text', (text) => {
-        currentTextContent += text
-        fullResponse += text
+        currentIterationText += text
+        // Only accumulate to fullResponse if not in finalResponseOnly mode
+        // (we'll set fullResponse from currentIterationText at the end if needed)
+        if (!finalResponseOnly) {
+          fullResponse += text
+        }
         onChunk(text)
       })
 
@@ -362,7 +382,12 @@ export async function sendMessageWithTools(
       console.warn('[LLM] Max iterations reached in tool loop')
     }
 
-    onComplete(fullResponse)
+    // If finalResponseOnly mode, only return text from the last iteration (the JSON output)
+    const responseToReturn = finalResponseOnly ? currentIterationText : fullResponse
+    console.log(
+      `[LLM] Returning response (finalResponseOnly=${finalResponseOnly}), length: ${responseToReturn.length}`
+    )
+    onComplete(responseToReturn)
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.log('[LLM] Stream cancelled by user')

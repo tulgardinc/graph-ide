@@ -10,7 +10,20 @@ import {
   addEdge
 } from '@xyflow/react'
 import { getLayoutedElements } from '../lib/elkLayout'
-import type { ProjectSymbols, ExtractedSymbol, SemanticAnalysis } from '../../../preload/index.d'
+import {
+  buildColorMap,
+  type ColorMap,
+  type ColorMapEntry,
+  SYSTEM_BORDER_COLOR
+} from '../lib/colorUtils'
+import type {
+  ProjectSymbols,
+  ExtractedSymbol,
+  SemanticAnalysis,
+  SystemNode,
+  DomainNode,
+  ModuleNode
+} from '../../../preload/index.d'
 
 // Import from split files
 import { type ZoomLevel, LAYOUT_OPTIONS } from './types'
@@ -24,54 +37,55 @@ export { getConnectedNodeIds, isEdgeConnected } from './selectionHelpers'
 // SEMANTIC NODE STYLING
 // =============================================================================
 
+/** Base styling per layer (sizes, padding, etc.) - colors come from ColorMap */
+const LAYER_BASE_STYLES: Record<string, React.CSSProperties> = {
+  system: {
+    borderRadius: '12px',
+    padding: '16px',
+    fontWeight: 600,
+    width: 160
+  },
+  domain: {
+    borderRadius: '10px',
+    padding: '14px',
+    fontWeight: 500,
+    width: 150
+  },
+  module: {
+    borderRadius: '8px',
+    padding: '12px',
+    fontWeight: 500,
+    width: 140
+  }
+}
+
+/**
+ * Create a semantic node with unique colors from the color map
+ *
+ * @param id - Node ID (e.g., "system:frontend")
+ * @param label - Display label
+ * @param layer - Semantic layer type
+ * @param colors - Colors from the color map (background, text, border)
+ * @param description - Optional description
+ */
 function createSemanticNode(
   id: string,
   label: string,
   layer: 'system' | 'domain' | 'module',
+  colors: ColorMapEntry,
   description?: string
 ): Node {
-  const styles: Record<string, React.CSSProperties> = {
-    system: {
-      background: '#1e293b',
-      color: '#f1f5f9',
-      border: '2px solid #3b82f6',
-      borderRadius: '12px',
-      padding: '16px',
-      fontWeight: 600,
-      width: 160
-    },
-    domain: {
-      background: '#14532d',
-      color: '#86efac',
-      border: '2px solid #10b981',
-      borderRadius: '10px',
-      padding: '14px',
-      fontWeight: 500,
-      width: 150
-    },
-    module: {
-      background: '#1e1b4b',
-      color: '#a5b4fc',
-      border: '2px solid #8b5cf6',
-      borderRadius: '8px',
-      padding: '12px',
-      fontWeight: 500,
-      width: 140
-    }
-  }
-
-  const icons: Record<string, string> = {
-    system: '🏗️',
-    domain: '📦',
-    module: '🧩'
-  }
-
   return {
     id,
     type: 'default',
     position: { x: 0, y: 0 },
-    data: { label: `${icons[layer]} ${label}`, description },
-    style: styles[layer]
+    data: { label, description, layer },
+    style: {
+      ...LAYER_BASE_STYLES[layer],
+      background: colors.background,
+      color: colors.text,
+      border: `2px solid ${colors.border}`
+    }
   }
 }
 
@@ -104,6 +118,9 @@ interface GraphState {
   semanticError: string | null
   semanticProgress: string | null
   semanticCurrentTool: { name: string; description: string } | null
+
+  // Color map for visual hierarchy (nodeId → colors)
+  colorMap: ColorMap
 
   // React Flow handlers
   onNodesChange: OnNodesChange
@@ -152,6 +169,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   semanticError: null,
   semanticProgress: null,
   semanticCurrentTool: null,
+
+  colorMap: new Map(),
 
   setSelectedNodeIds: (ids: string[]) => {
     set({ selectedNodeIds: new Set(ids) })
@@ -211,16 +230,23 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         modules: analysis.modules.length
       })
 
-      // Convert semantic nodes to React Flow nodes
-      const systemNodes = analysis.systems.map((s) =>
-        createSemanticNode(s.id, s.name, 'system', s.description)
-      )
-      const domainNodes = analysis.domains.map((d) =>
-        createSemanticNode(d.id, d.name, 'domain', d.description)
-      )
-      const moduleNodes = analysis.modules.map((m) =>
-        createSemanticNode(m.id, m.name, 'module', m.description)
-      )
+      // Build color map for unique colors with parent-child border inheritance
+      const colorMap = buildColorMap(analysis.systems, analysis.domains, analysis.modules)
+      console.log('[GraphStore] Built color map for', colorMap.size, 'nodes')
+
+      // Convert semantic nodes to React Flow nodes with dynamic colors
+      const systemNodes = analysis.systems.map((s) => {
+        const colors = colorMap.get(s.id)!
+        return createSemanticNode(s.id, s.name, 'system', colors, s.description)
+      })
+      const domainNodes = analysis.domains.map((d) => {
+        const colors = colorMap.get(d.id)!
+        return createSemanticNode(d.id, d.name, 'domain', colors, d.description)
+      })
+      const moduleNodes = analysis.modules.map((m) => {
+        const colors = colorMap.get(m.id)!
+        return createSemanticNode(m.id, m.name, 'module', colors, m.description)
+      })
 
       // Create edges from semantic edges
       const semanticEdges = (analysis.edges || []).map((edge) => ({
@@ -304,6 +330,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         semanticLoading: false,
         semanticError: null,
         semanticProgress: null,
+        colorMap, // Store for symbol border coloring
         nodesByLevel: {
           ...currentState.nodesByLevel,
           system: layoutedSystemNodes,
@@ -316,10 +343,27 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           layer: domainEdges,
           construct: moduleEdges
         },
-  
+        layoutedLevels: new Set([...currentState.layoutedLevels, 'system', 'layer', 'construct'])
+      })
+
+      console.log('[GraphStore] Semantic nodes loaded into graph')
+    } catch (error) {
+      console.error('[GraphStore] Failed to load semantic analysis:', error)
+      set({
+        semanticLoading: false,
+        semanticError: error instanceof Error ? error.message : String(error),
+        semanticProgress: null
+      })
+    } finally {
+      unsubProgress()
+      unsubToolStart()
+      unsubToolEnd()
+      set({ semanticCurrentTool: null })
+    }
+  },
 
   loadSymbols: async () => {
-    const { projectSymbols, symbolsLoading } = get()
+    const { projectSymbols, symbolsLoading, semanticAnalysis, colorMap } = get()
 
     if (symbolsLoading || projectSymbols !== null) return
 
@@ -334,7 +378,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
       const result = await window.api.scanProject()
       const allSymbols: ExtractedSymbol[] = result.files.flatMap((file) => file.symbols)
-      const symbolNodesList = symbolsToNodes(allSymbols)
+
+      // Pass modules and colorMap for construct-based border coloring
+      const modules = semanticAnalysis?.modules
+      const symbolNodesList = symbolsToNodes(allSymbols, modules, modules ? colorMap : undefined)
 
       const validNodeIds = new Set(symbolNodesList.map((node) => node.id))
       const callEdges = result.callEdges || []

@@ -19,7 +19,8 @@ import {
 } from '../../store/graphStore'
 import { ZoomLevelIndicator } from './ZoomLevelIndicator'
 import { NodeDetailPanel } from './NodeDetailPanel'
-import type { ExtractedSymbol } from '../../../../preload/index.d'
+import { resolveSymbolConstruct } from '../../store/symbolHelpers'
+import type { ExtractedSymbol, ModuleNode } from '../../../../preload/index.d'
 
 // Default panel width matches the defaultSize in NodeDetailPanel
 const DEFAULT_DETAIL_PANEL_WIDTH = 400
@@ -34,7 +35,8 @@ function GraphCanvas(): React.JSX.Element {
     onConnect,
     zoomLevel,
     layoutCurrentLevel,
-    setSelectedNodeIds
+    setSelectedNodeIds,
+    semanticAnalysis
   } = useGraphStore()
   const { fitView } = useReactFlow()
 
@@ -65,6 +67,25 @@ function GraphCanvas(): React.JSX.Element {
     // Symbol is stored in node.data.symbol by symbolsToNodes() in graphStore
     return (firstNode.data?.symbol as ExtractedSymbol) ?? null
   }, [selectedNodes])
+
+  // Get the construct (module) that the selected symbol belongs to
+  const selectedSymbolConstructInfo = useMemo(() => {
+    if (!selectedSymbol || !semanticAnalysis) return undefined
+
+    const modules = semanticAnalysis.modules as ModuleNode[]
+    const constructId = resolveSymbolConstruct(selectedSymbol.id, modules)
+
+    if (!constructId) return undefined
+
+    // Find the module to get its name
+    const module = modules.find((m) => m.id === constructId)
+    if (!module) return undefined
+
+    return {
+      id: module.id,
+      name: module.name
+    }
+  }, [selectedSymbol, semanticAnalysis])
 
   // Create a Set of all node IDs in the graph (for checking navigability)
   const graphNodeIds = useMemo(() => {
@@ -211,6 +232,7 @@ function GraphCanvas(): React.JSX.Element {
           graphNodeIds={graphNodeIds}
           onNavigateToSymbol={handleNavigateToSymbol}
           onResize={setDetailPanelWidth}
+          constructInfo={selectedSymbolConstructInfo}
         />
       )}
 
