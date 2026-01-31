@@ -11,6 +11,7 @@ import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView, lineNumbers } from '@codemirror/view'
 import type { ExtractedSymbol } from '../../../../preload/index.d'
+import { generateBorderColor, generateTransparentBackground } from '@renderer/lib/colorUtils'
 
 interface NodeDetailPanelProps {
   symbol: ExtractedSymbol
@@ -26,6 +27,8 @@ interface NodeDetailPanelProps {
     id: string
     name: string
   }
+  /** Callback when construct badge is clicked (navigates to construct zoom level) */
+  onNavigateToConstruct?: (constructId: string) => void
 }
 
 export function NodeDetailPanel({
@@ -34,7 +37,8 @@ export function NodeDetailPanel({
   graphNodeIds,
   onNavigateToSymbol,
   onResize,
-  constructInfo
+  constructInfo,
+  onNavigateToConstruct
 }: NodeDetailPanelProps): React.JSX.Element {
   const [sourceCode, setSourceCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -136,8 +140,14 @@ export function NodeDetailPanel({
                   <span className="text-xs text-slate-600">•</span>
                   <Badge
                     variant="outline"
-                    className="text-xs bg-purple-500/20 text-purple-300 border-purple-500/40 px-2 py-0"
-                    title={`Belongs to construct: ${constructInfo.id}`}
+                    className={`text-xs px-2 py-0 ${onNavigateToConstruct ? 'cursor-pointer hover:opacity-80' : ''}`}
+                    title={`Click to navigate to construct: ${constructInfo.name}`}
+                    style={{
+                      borderColor: generateBorderColor(constructInfo.id),
+                      color: generateBorderColor(constructInfo.id),
+                      backgroundColor: generateTransparentBackground(constructInfo.id, 0.2)
+                    }}
+                    onClick={() => onNavigateToConstruct?.(constructInfo.id)}
                   >
                     🧩 {constructInfo.name}
                   </Badge>

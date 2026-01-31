@@ -36,6 +36,7 @@ function GraphCanvas(): React.JSX.Element {
     zoomLevel,
     layoutCurrentLevel,
     setSelectedNodeIds,
+    setZoomLevel,
     semanticAnalysis
   } = useGraphStore()
   const { fitView } = useReactFlow()
@@ -110,6 +111,21 @@ function GraphCanvas(): React.JSX.Element {
   const handleCloseDetailPanel = useCallback(() => {
     setDetailPanelOpen(false)
   }, [])
+
+  // Handle navigation from detail panel to construct (zoom level change)
+  const handleNavigateToConstruct = useCallback(
+    (constructId: string) => {
+      // Close detail panel (we're leaving symbol view)
+      setDetailPanelOpen(false)
+      // Clear local selection state
+      setSelectedNodes([])
+      // Change to construct zoom level
+      setZoomLevel('construct')
+      // Select the construct node (will be highlighted after zoom change)
+      setSelectedNodeIds([constructId])
+    },
+    [setZoomLevel, setSelectedNodeIds]
+  )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
   const nodes = useMemo(() => {
@@ -233,6 +249,7 @@ function GraphCanvas(): React.JSX.Element {
           onNavigateToSymbol={handleNavigateToSymbol}
           onResize={setDetailPanelWidth}
           constructInfo={selectedSymbolConstructInfo}
+          onNavigateToConstruct={handleNavigateToConstruct}
         />
       )}
 

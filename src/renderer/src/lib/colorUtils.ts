@@ -144,6 +144,19 @@ export function generateBorderColor(nodeId: string): string {
   return generateBorderFromHue(hue)
 }
 
+/**
+ * Generate a transparent background color from a node ID
+ * Uses the same hue as the border but with transparency
+ *
+ * @param nodeId - Node ID to generate color from
+ * @param alpha - Alpha value (0-1), defaults to 0.2
+ * @returns HSLA color string
+ */
+export function generateTransparentBackground(nodeId: string, alpha: number = 0.2): string {
+  const { hue } = generateNodeColors(nodeId)
+  return `hsla(${hue}, 85%, 50%, ${alpha})`
+}
+
 // =============================================================================
 // COLOR MAP BUILDER
 // =============================================================================
