@@ -4,42 +4,45 @@
  * Provides deterministic color generation for semantic nodes
  * to create visual hierarchy between zoom levels.
  *
- * Colors are designed for a dark theme (slate-950 background)
- * with cyan accent (#22d3ee).
+ * NEW APPROACH:
+ * - Consistent dark background for all semantic nodes (layers 1-3)
+ * - Unique vibrant text colors to distinguish nodes
+ * - Border colors for hierarchy indication
  */
 
 // =============================================================================
-// PREDEFINED COLOR PALETTE (10 vibrant, distinct colors)
+// PREDEFINED TEXT COLOR PALETTE (10 vibrant, distinct colors)
 // =============================================================================
 
 /**
- * Curated color palette for first 10 nodes of each type
- * These are carefully chosen to be distinct and work well on dark backgrounds
- *
- * Each color has:
- * - hue: Base hue value
- * - bgSat: Background saturation (higher = more vibrant)
- * - bgLight: Background lightness (dark but visible)
+ * Curated text color palette - vibrant and glowing
+ * These are carefully chosen to be distinct and readable on dark backgrounds
  */
-const PREDEFINED_PALETTE = [
-  { hue: 187, bgSat: 85, bgLight: 42 }, // Cyan (matches accent) - GLOWING
-  { hue: 220, bgSat: 80, bgLight: 40 }, // Blue - GLOWING
-  { hue: 265, bgSat: 75, bgLight: 42 }, // Violet/Purple - GLOWING
-  { hue: 320, bgSat: 80, bgLight: 40 }, // Pink/Magenta - GLOWING
-  { hue: 0, bgSat: 75, bgLight: 42 }, // Red - GLOWING
-  { hue: 32, bgSat: 85, bgLight: 45 }, // Orange - GLOWING
-  { hue: 50, bgSat: 80, bgLight: 48 }, // Amber/Yellow - GLOWING (higher for visibility)
-  { hue: 140, bgSat: 70, bgLight: 38 }, // Emerald/Green - GLOWING
-  { hue: 165, bgSat: 75, bgLight: 40 }, // Teal - GLOWING
-  { hue: 290, bgSat: 70, bgLight: 42 } // Fuchsia - GLOWING
+const PREDEFINED_TEXT_HUES = [
+  187, // Cyan (matches app accent)
+  220, // Blue
+  265, // Violet/Purple
+  320, // Pink/Magenta
+  0, // Red
+  32, // Orange
+  50, // Amber/Yellow
+  140, // Emerald/Green
+  165, // Teal
+  290 // Fuchsia
 ]
 
 // =============================================================================
 // CONSTANTS
 // =============================================================================
 
+/** Consistent dark background for all semantic nodes (matches symbol node backgrounds) */
+export const SEMANTIC_NODE_BACKGROUND = '#0f172a' // slate-900 (same as function symbols)
+
+/** Consistent text color for all semantic nodes (off-white for readability) */
+export const SEMANTIC_NODE_TEXT_COLOR = '#f1f5f9' // slate-100 (off-white)
+
 /** Default border color for system nodes (slate) */
-export const SYSTEM_BORDER_COLOR = '#475569'
+export const SYSTEM_BORDER_COLOR = '#475569' // slate-600
 
 /** Border color for unclassified/unmapped symbols */
 export const UNCLASSIFIED_BORDER_COLOR = '#71717a' // zinc-500 - neutral gray
@@ -47,14 +50,9 @@ export const UNCLASSIFIED_BORDER_COLOR = '#71717a' // zinc-500 - neutral gray
 /** Text color for unclassified symbols */
 export const UNCLASSIFIED_TEXT_COLOR = '#a1a1aa' // zinc-400
 
-// HSL ranges for randomly generated colors (beyond the first 10)
-const RANDOM_HUE_STEPS = [15, 45, 75, 105, 135, 195, 225, 255, 285, 315, 345] // Avoid clustering
-const RANDOM_SATURATION = { min: 55, max: 75 } // Higher saturation for vibrancy
-const RANDOM_LIGHTNESS = { min: 18, max: 24 } // Dark backgrounds
-
-// Text colors - always light for contrast on dark backgrounds
-const TEXT_SATURATION = { min: 60, max: 80 }
-const TEXT_LIGHTNESS = { min: 78, max: 88 }
+// Text color generation parameters - vibrant and glowing
+const TEXT_SATURATION = { min: 75, max: 90 } // High saturation for vibrancy
+const TEXT_LIGHTNESS = { min: 60, max: 72 } // Bright enough to glow on dark bg
 
 // =============================================================================
 // HASH FUNCTION
@@ -85,68 +83,65 @@ function hashToRange(hash: number, min: number, max: number): number {
 // =============================================================================
 
 export interface NodeColors {
-  /** Background color (HSL string) */
+  /** Background color (consistent for all semantic nodes) */
   background: string
-  /** Text color (HSL string) */
+  /** Text color (unique per node - vibrant/glowing) */
   text: string
-  /** Raw hue value (for deriving related colors) */
+  /** Raw hue value (for deriving related colors like borders) */
   hue: number
 }
 
 /**
  * Generate unique, deterministic colors for a node based on its ID
  *
- * Uses predefined colors for the first 10 nodes (by hash index),
- * then generates random saturated colors for additional nodes.
+ * Uses consistent dark background + unique vibrant text color
  *
  * @param nodeId - Unique identifier for the node (e.g., "system:frontend")
  * @returns Colors object with background, text, and hue values
  */
 export function generateNodeColors(nodeId: string): NodeColors {
   const hash = hashString(nodeId)
-  const paletteIndex = hash % PREDEFINED_PALETTE.length
+  const paletteIndex = hash % PREDEFINED_TEXT_HUES.length
 
-  let hue: number
-  let bgSaturation: number
-  let bgLightness: number
-
-  // Use predefined palette based on hash
-  const palette = PREDEFINED_PALETTE[paletteIndex]
-  hue = palette.hue
-  bgSaturation = palette.bgSat
-  bgLightness = palette.bgLight
+  // Get base hue from predefined palette
+  let hue = PREDEFINED_TEXT_HUES[paletteIndex]
 
   // Add slight variation based on hash to make similar IDs distinguishable
-  const hueVariation = ((hash >> 8) % 15) - 7 // -7 to +7 degrees
-  const satVariation = ((hash >> 16) % 10) - 5 // -5 to +5 %
-  const lightVariation = ((hash >> 24) % 6) - 3 // -3 to +3 %
-
+  const hueVariation = ((hash >> 8) % 20) - 10 // -10 to +10 degrees
   hue = (hue + hueVariation + 360) % 360
-  bgSaturation = Math.max(65, Math.min(90, bgSaturation + satVariation)) // Higher saturation for glow
-  bgLightness = Math.max(35, Math.min(52, bgLightness + lightVariation)) // Brighter for glow effect
 
-  // Text uses same hue but much lighter for readability
+  // Generate vibrant text color
   const textSaturation = hashToRange(hash >> 12, TEXT_SATURATION.min, TEXT_SATURATION.max)
   const textLightness = hashToRange(hash >> 20, TEXT_LIGHTNESS.min, TEXT_LIGHTNESS.max)
 
   return {
-    background: `hsl(${hue}, ${bgSaturation}%, ${bgLightness}%)`,
-    text: `hsl(${hue}, ${textSaturation}%, ${textLightness}%)`,
+    background: SEMANTIC_NODE_BACKGROUND,
+    text: SEMANTIC_NODE_TEXT_COLOR, // Consistent text color for all semantic nodes
     hue
   }
 }
 
 /**
- * Convert HSL background to a suitable border color
- * Uses the same hue with higher saturation and lightness for vibrancy
+ * Generate a vibrant border color from a hue
+ * Uses high saturation and medium lightness for a glowing effect
+ *
+ * @param hue - Base hue value
+ * @returns Border color string
+ */
+export function generateBorderFromHue(hue: number): string {
+  return `hsl(${hue}, 85%, 50%)`
+}
+
+/**
+ * Convert HSL text color to a suitable border color
+ * Uses the same hue with high saturation for vibrancy
  *
  * @param nodeId - Node ID to generate color from
  * @returns Border color string
  */
 export function generateBorderColor(nodeId: string): string {
   const { hue } = generateNodeColors(nodeId)
-  // Border is vibrant: high saturation and medium-high lightness
-  return `hsl(${hue}, 80%, 55%)`
+  return generateBorderFromHue(hue)
 }
 
 // =============================================================================
@@ -164,6 +159,10 @@ export type ColorMap = Map<string, ColorMapEntry>
 /**
  * Build a color map for semantic nodes with parent-child border inheritance
  *
+ * Background is consistent (dark slate)
+ * Text colors are unique per node (vibrant/glowing)
+ * Border colors indicate hierarchy (parent's text color)
+ *
  * @param systems - System nodes (layer 1)
  * @param domains - Domain nodes (layer 2)
  * @param modules - Module nodes (layer 3)
@@ -176,7 +175,20 @@ export function buildColorMap(
 ): ColorMap {
   const colorMap: ColorMap = new Map()
 
-  // Process systems (border = slate)
+  // First pass: compute unique border colors for all nodes based on their hue
+  const nodeBorders = new Map<string, string>()
+
+  for (const system of systems) {
+    nodeBorders.set(system.id, generateBorderColor(system.id))
+  }
+  for (const domain of domains) {
+    nodeBorders.set(domain.id, generateBorderColor(domain.id))
+  }
+  for (const module of modules) {
+    nodeBorders.set(module.id, generateBorderColor(module.id))
+  }
+
+  // Process systems (border = slate since no parent)
   for (const system of systems) {
     const colors = generateNodeColors(system.id)
     colorMap.set(system.id, {
@@ -186,25 +198,18 @@ export function buildColorMap(
     })
   }
 
-  // Process domains (border = parent system's background)
+  // Process domains (border = parent system's unique border color)
   for (const domain of domains) {
     const colors = generateNodeColors(domain.id)
     let border = SYSTEM_BORDER_COLOR // fallback
 
-    // Find parent system's color for border
+    // Find parent system's border color
     if (domain.parentId) {
-      const parentEntry = colorMap.get(domain.parentId)
-      if (parentEntry) {
-        border = parentEntry.background
-      }
+      border = nodeBorders.get(domain.parentId) || SYSTEM_BORDER_COLOR
     } else {
-      // Derive parent from systems' children arrays
       const parentSystem = systems.find((s) => s.children?.includes(domain.id))
       if (parentSystem) {
-        const parentEntry = colorMap.get(parentSystem.id)
-        if (parentEntry) {
-          border = parentEntry.background
-        }
+        border = nodeBorders.get(parentSystem.id) || SYSTEM_BORDER_COLOR
       }
     }
 
@@ -215,25 +220,18 @@ export function buildColorMap(
     })
   }
 
-  // Process modules (border = parent domain's background)
+  // Process modules (border = parent domain's unique border color)
   for (const module of modules) {
     const colors = generateNodeColors(module.id)
     let border = SYSTEM_BORDER_COLOR // fallback
 
-    // Find parent domain's color for border
+    // Find parent domain's border color
     if (module.parentId) {
-      const parentEntry = colorMap.get(module.parentId)
-      if (parentEntry) {
-        border = parentEntry.background
-      }
+      border = nodeBorders.get(module.parentId) || SYSTEM_BORDER_COLOR
     } else {
-      // Derive parent from domains' children arrays
       const parentDomain = domains.find((d) => d.children?.includes(module.id))
       if (parentDomain) {
-        const parentEntry = colorMap.get(parentDomain.id)
-        if (parentEntry) {
-          border = parentEntry.background
-        }
+        border = nodeBorders.get(parentDomain.id) || SYSTEM_BORDER_COLOR
       }
     }
 
@@ -259,11 +257,6 @@ export function getSymbolBorderColor(constructId: string | undefined, colorMap: 
     return UNCLASSIFIED_BORDER_COLOR
   }
 
-  const entry = colorMap.get(constructId)
-  if (!entry) {
-    return UNCLASSIFIED_BORDER_COLOR
-  }
-
-  // Symbol border = construct's background color
-  return entry.background
+  // Generate unique border color from construct ID (since text colors are now consistent)
+  return generateBorderColor(constructId)
 }
