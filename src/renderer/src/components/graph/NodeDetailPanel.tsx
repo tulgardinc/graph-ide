@@ -22,13 +22,13 @@ interface NodeDetailPanelProps {
   onNavigateToSymbol?: (symbolId: string) => void
   /** Callback when panel is resized */
   onResize?: (width: number) => void
-  /** The construct/module this symbol belongs to (if classified) */
-  constructInfo?: {
+  /** The module this symbol belongs to (if classified) */
+  moduleInfo?: {
     id: string
     name: string
   }
-  /** Callback when construct badge is clicked (navigates to construct zoom level) */
-  onNavigateToConstruct?: (constructId: string) => void
+  /** Callback when module badge is clicked (navigates to module zoom level) */
+  onNavigateToModule?: (moduleId: string) => void
 }
 
 export function NodeDetailPanel({
@@ -37,8 +37,8 @@ export function NodeDetailPanel({
   graphNodeIds,
   onNavigateToSymbol,
   onResize,
-  constructInfo,
-  onNavigateToConstruct
+  moduleInfo,
+  onNavigateToModule
 }: NodeDetailPanelProps): React.JSX.Element {
   const [sourceCode, setSourceCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -135,25 +135,25 @@ export function NodeDetailPanel({
             </CardTitle>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-slate-400">{symbol.kind}</span>
-              {constructInfo && (
+              {moduleInfo && (
                 <>
                   <span className="text-xs text-slate-600">•</span>
                   <Badge
                     variant="outline"
-                    className={`text-xs px-2 py-0 ${onNavigateToConstruct ? 'cursor-pointer hover:opacity-80' : ''}`}
-                    title={`Click to navigate to construct: ${constructInfo.name}`}
+                    className={`text-xs px-2 py-0 ${onNavigateToModule ? 'cursor-pointer hover:opacity-80' : ''}`}
+                    title={`Click to navigate to module: ${moduleInfo.name}`}
                     style={{
-                      borderColor: generateBorderColor(constructInfo.id),
-                      color: generateBorderColor(constructInfo.id),
-                      backgroundColor: generateTransparentBackground(constructInfo.id, 0.2)
+                      borderColor: generateBorderColor(moduleInfo.id),
+                      color: generateBorderColor(moduleInfo.id),
+                      backgroundColor: generateTransparentBackground(moduleInfo.id, 0.2)
                     }}
-                    onClick={() => onNavigateToConstruct?.(constructInfo.id)}
+                    onClick={() => onNavigateToModule?.(moduleInfo.id)}
                   >
-                    🧩 {constructInfo.name}
+                    🧩 {moduleInfo.name}
                   </Badge>
                 </>
               )}
-              {!constructInfo && (
+              {!moduleInfo && (
                 <>
                   <span className="text-xs text-slate-600">•</span>
                   <span className="text-xs text-slate-500 italic">Unclassified</span>

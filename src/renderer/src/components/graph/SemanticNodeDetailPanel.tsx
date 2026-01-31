@@ -152,8 +152,8 @@ export function SemanticNodeDetailPanel({
   // Get layer display info
   const layerInfo = {
     system: { icon: '🏛️', color: 'cyan', label: 'System' },
-    domain: { icon: '📦', color: 'purple', label: 'Layer' },
-    module: { icon: '🧩', color: 'green', label: 'Construct' }
+    domain: { icon: '📦', color: 'purple', label: 'Domain' },
+    module: { icon: '🧩', color: 'green', label: 'Module' }
   }[node.layer] || { icon: '📄', color: 'gray', label: 'Node' }
 
   const borderColor = generateBorderColor(node.id)

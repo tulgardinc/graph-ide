@@ -3,7 +3,7 @@
  *
  * Generates detailed markdown descriptions for semantic nodes using LLM.
  * - Eager generation for system and domain layers (starts after semantic analysis)
- * - Lazy generation for construct/module layer (on-demand when user opens details)
+ * - Lazy generation for module layer (on-demand when user opens details)
  *
  * Descriptions are cached to disk at: .graph-ide/llm-outputs/{node-id}.md
  */
@@ -167,9 +167,9 @@ function getLayerDisplayName(layer: SemanticLayer): string {
     case 'system':
       return 'System'
     case 'domain':
-      return 'Layer'
+      return 'Domain'
     case 'module':
-      return 'Construct'
+      return 'Module'
     default:
       return layer
   }
@@ -192,8 +192,8 @@ function getSystemPrompt(): string {
 
 The codebase is organized into 4 layers:
 - **System**: High-level architectural boundaries (e.g., "Frontend", "Backend API")
-- **Layer**: Business/logical groupings within a system (e.g., "User Management", "Authentication")  
-- **Construct**: Logical code groupings within a layer (e.g., "Auth Service", "User Validators")
+- **Domain**: Business/logical groupings within a system (e.g., "User Management", "Authentication")  
+- **Module**: Logical code groupings within a domain (e.g., "Auth Service", "User Validators")
 - **Symbol**: Individual code symbols (functions, classes, etc.)
 
 ## Using Tools
@@ -237,13 +237,13 @@ function buildUserPrompt(
   const displayName = getLayerDisplayName(layer)
   const childrenInfo = node.children.length > 0 ? node.children.join(', ') : 'none'
 
-  // Get parent info for Layers and Constructs
+  // Get parent info for domains and modules
   let parentInfo = ''
   if ('parentId' in node && node.parentId) {
     parentInfo = `\n**Parent**: ${node.parentId}`
   }
 
-  // Get mappings for Constructs
+  // Get mappings for modules
   let mappingsInfo = ''
   if (layer === 'module' && 'mappings' in node && node.mappings) {
     const m = node.mappings
@@ -260,8 +260,8 @@ function buildUserPrompt(
   const contextSummary = `
 **Project Overview**:
 - ${analysis.systems.length} System(s): ${analysis.systems.map((s) => s.name).join(', ')}
-- ${analysis.domains.length} Layer(s): ${analysis.domains.map((d) => d.name).join(', ')}
-- ${analysis.modules.length} Construct(s): ${analysis.modules.map((m) => m.name).join(', ')}
+- ${analysis.domains.length} Domain(s): ${analysis.domains.map((d) => d.name).join(', ')}
+- ${analysis.modules.length} Module(s): ${analysis.modules.map((m) => m.name).join(', ')}
 `
 
   // Special emphasis for System-level nodes
@@ -470,7 +470,7 @@ export function startEagerGeneration(): void {
 }
 
 /**
- * Request a description for a specific node (lazy generation for constructs)
+ * Request a description for a specific node (lazy generation for modules)
  * Returns the cached content if available, otherwise queues for generation
  */
 export function requestDescription(nodeId: string): string | null {

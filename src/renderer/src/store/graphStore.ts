@@ -15,7 +15,7 @@ import type { ProjectSymbols, ExtractedSymbol, SemanticAnalysis } from '../../..
 
 // Import from split files
 import { type ZoomLevel, LAYOUT_OPTIONS } from './types'
-import { symbolsToNodes, dependencyEdgesToFlowEdges } from './symbolHelpers'
+import { symbolsToNodes, dependencyEdgesToFlowEdges, getSymbolsForModule } from './symbolHelpers'
 
 // Re-export types and helpers for consumers
 export { type ZoomLevel, ZOOM_LEVELS, ZOOM_LEVEL_LABELS, LAYOUT_OPTIONS } from './types'
@@ -95,6 +95,16 @@ interface GraphState {
   // Selection state for highlighting
   selectedNodeIds: Set<string>
 
+  // Pending module selection for drill-down navigation
+  // When drilling from module to symbol, we need to wait for symbols to load
+  // before we can determine which symbols belong to the module
+  pendingModuleSelectionForSymbols: string | null
+
+  // Pending symbol IDs to select after drill-down navigation
+  // This is populated by loadSymbols() and should be consumed by GraphPanel
+  // to apply selection through React Flow (which is the source of truth for selection)
+  pendingSymbolIdsToSelect: string[]
+
   // Project symbols from tree-sitter
   projectSymbols: ProjectSymbols | null
   symbolsLoading: boolean
@@ -118,6 +128,8 @@ interface GraphState {
   // Actions
   setZoomLevel: (level: ZoomLevel) => void
   setSelectedNodeIds: (ids: string[]) => void
+  setPendingModuleSelectionForSymbols: (moduleId: string | null) => void
+  clearPendingSymbolIdsToSelect: () => void
   layoutCurrentLevel: () => Promise<void>
   loadSymbols: () => Promise<void>
   resetSymbols: () => void
@@ -133,20 +145,22 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   nodesByLevel: {
     system: [],
-    layer: [],
-    construct: [],
+    domain: [],
+    module: [],
     symbol: []
   },
 
   edgesByLevel: {
     system: [],
-    layer: [],
-    construct: [],
+    domain: [],
+    module: [],
     symbol: []
   },
 
   layoutedLevels: new Set<ZoomLevel>(),
   selectedNodeIds: new Set<string>(),
+  pendingModuleSelectionForSymbols: null,
+  pendingSymbolIdsToSelect: [],
 
   projectSymbols: null,
   symbolsLoading: false,
@@ -162,6 +176,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   setSelectedNodeIds: (ids: string[]) => {
     set({ selectedNodeIds: new Set(ids) })
+  },
+
+  setPendingModuleSelectionForSymbols: (moduleId: string | null) => {
+    set({ pendingModuleSelectionForSymbols: moduleId })
+  },
+
+  clearPendingSymbolIdsToSelect: () => {
+    set({ pendingSymbolIdsToSelect: [] })
   },
 
   setZoomLevel: (level) => {
@@ -289,7 +311,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           const { nodes } = await getLayoutedElements(
             domainNodes,
             domainEdges,
-            LAYOUT_OPTIONS.layer
+            LAYOUT_OPTIONS.domain
           )
           layoutedDomainNodes = nodes
         } catch (e) {
@@ -304,7 +326,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           const { nodes } = await getLayoutedElements(
             moduleNodes,
             moduleEdges,
-            LAYOUT_OPTIONS.construct
+            LAYOUT_OPTIONS.module
           )
           layoutedModuleNodes = nodes
         } catch (e) {
@@ -322,16 +344,16 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         nodesByLevel: {
           ...currentState.nodesByLevel,
           system: layoutedSystemNodes,
-          layer: layoutedDomainNodes,
-          construct: layoutedModuleNodes
+          domain: layoutedDomainNodes,
+          module: layoutedModuleNodes
         },
         edgesByLevel: {
           ...currentState.edgesByLevel,
           system: systemEdges,
-          layer: domainEdges,
-          construct: moduleEdges
+          domain: domainEdges,
+          module: moduleEdges
         },
-        layoutedLevels: new Set([...currentState.layoutedLevels, 'system', 'layer', 'construct'])
+        layoutedLevels: new Set([...currentState.layoutedLevels, 'system', 'domain', 'module'])
       })
 
       console.log('[GraphStore] Semantic nodes loaded into graph')
@@ -351,9 +373,39 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
 
   loadSymbols: async () => {
-    const { projectSymbols, symbolsLoading, semanticAnalysis, colorMap } = get()
+    const {
+      projectSymbols,
+      symbolsLoading,
+      semanticAnalysis,
+      colorMap,
+      pendingModuleSelectionForSymbols
+    } = get()
 
-    if (symbolsLoading || projectSymbols !== null) return
+    // If symbols are already loaded, handle pending module selection immediately
+    // This handles the case where user drills into symbols a second time
+    if (projectSymbols !== null) {
+      if (pendingModuleSelectionForSymbols && semanticAnalysis?.modules) {
+        const symbolIds = getSymbolsForModule(
+          pendingModuleSelectionForSymbols,
+          semanticAnalysis.modules,
+          projectSymbols
+        )
+        console.log(
+          '[GraphStore] Symbols already loaded, applying pending selection:',
+          pendingModuleSelectionForSymbols,
+          '->',
+          symbolIds.length,
+          'symbols'
+        )
+        set({
+          pendingSymbolIdsToSelect: symbolIds,
+          pendingModuleSelectionForSymbols: null
+        })
+      }
+      return
+    }
+
+    if (symbolsLoading) return
 
     set({ symbolsLoading: true, symbolsError: null })
 
@@ -394,17 +446,39 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       }
 
       const currentState = get()
+      const pendingModuleId = currentState.pendingModuleSelectionForSymbols
+
+      // Check if we have a pending module selection from drill-down navigation
+      let symbolIdsToSelect: string[] = []
+      if (pendingModuleId && modules) {
+        // Now that we have projectSymbols, we can compute which symbols belong to the module
+        symbolIdsToSelect = getSymbolsForModule(pendingModuleId, modules, result)
+        console.log(
+          '[GraphStore] Pending module selection:',
+          pendingModuleId,
+          '->',
+          symbolIdsToSelect.length,
+          'symbols'
+        )
+      }
+
       set({
         projectSymbols: result,
         symbolsLoading: false,
         nodesByLevel: { ...currentState.nodesByLevel, symbol: layoutedSymbolNodes },
         edgesByLevel: { ...currentState.edgesByLevel, symbol: symbolEdgesList },
-        layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol'])
+        layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol']),
+        // Clear the pending module selection after processing
+        pendingModuleSelectionForSymbols: null,
+        // If we have symbols to select, store them as pending for GraphPanel to consume
+        // GraphPanel will apply selection through React Flow (source of truth for selection)
+        pendingSymbolIdsToSelect: symbolIdsToSelect
       })
     } catch (error) {
       set({
         symbolsLoading: false,
-        symbolsError: error instanceof Error ? error.message : String(error)
+        symbolsError: error instanceof Error ? error.message : String(error),
+        pendingModuleSelectionForSymbols: null // Clear on error too
       })
     }
   },
@@ -467,8 +541,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       projectSymbols: null,
       symbolsLoading: false,
       symbolsError: null,
-      nodesByLevel: { system: [], layer: [], construct: [], symbol: [] },
-      edgesByLevel: { system: [], layer: [], construct: [], symbol: [] },
+      nodesByLevel: { system: [], domain: [], module: [], symbol: [] },
+      edgesByLevel: { system: [], domain: [], module: [], symbol: [] },
       layoutedLevels: new Set([...layoutedLevels].filter((l) => l !== 'symbol'))
     })
   }

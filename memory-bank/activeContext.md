@@ -1,6 +1,30 @@
 # Active Context
 
-## Latest Implementation: LLM-Generated Descriptions for Semantic Nodes (January 31, 2026)
+## Latest Implementation: Semantic Layer Naming Refactor (January 31, 2026)
+
+### Completed Refactor
+
+Standardized semantic layer naming convention across the entire codebase:
+
+**Correct Semantic Layer Hierarchy:**
+
+- `system` (Layer 1) - High-level architectural boundaries
+- `domain` (Layer 2) - Business/logical domains within a system
+- `module` (Layer 3) - Logical code groupings within a domain
+- `symbol` (Layer 4) - Individual code symbols (functions, classes, etc.)
+
+**Changes Made:**
+
+- **ZoomLevel type**: `'layer'` → `'domain'`, `'construct'` → `'module'`
+- **ZOOM_LEVEL_LABELS**: `Layer` → `Domain`, `Construct` → `Module`
+- **Functions renamed**: `resolveSymbolConstruct()` → `resolveSymbolModule()`
+- **Handlers renamed**: `handleNavigateToConstruct()` → `handleNavigateToModule()`
+- **Props renamed**: `constructInfo` → `moduleInfo`, `onNavigateToConstruct` → `onNavigateToModule`
+- **All code comments and prompts updated to use correct terminology**
+
+---
+
+## Previous Implementation: LLM-Generated Descriptions for Semantic Nodes (January 31, 2026)
 
 ### Completed Features
 
@@ -15,7 +39,7 @@
    - Background processing with 500ms delay between requests to avoid rate limiting
 
 3. **Lazy Generation**
-   - Construct/module descriptions generated on-demand when user opens detail panel
+   - Module descriptions generated on-demand when user opens detail panel
    - Higher priority (0) than eager generation
 
 4. **SemanticNodeDetailPanel** (`src/renderer/src/components/graph/SemanticNodeDetailPanel.tsx`)
@@ -34,22 +58,20 @@
 
 ---
 
-## Current Focus
+## Visual Hierarchy System (January 31, 2026)
 
-### Visual Hierarchy System (January 31, 2026)
-
-Implemented a dynamic color system for visual hierarchy between zoom levels, with parent-child border color inheritance and symbol-to-construct mapping.
+Implemented a dynamic color system for visual hierarchy between zoom levels, with parent-child border color inheritance and symbol-to-module mapping.
 
 **Color Hierarchy Model:**
 
-| Layer     | Background                                     | Border                                               |
-| --------- | ---------------------------------------------- | ---------------------------------------------------- |
-| System    | Unique HSL per node                            | Slate (#475569)                                      |
-| Domain    | Unique HSL per node                            | Parent System's background                           |
-| Construct | Unique HSL per node                            | Parent Domain's background                           |
-| Symbol    | Kind-based (function=teal, class=purple, etc.) | Parent Construct's background (or unclassified gray) |
+| Layer  | Background                                     | Border                                            |
+| ------ | ---------------------------------------------- | ------------------------------------------------- |
+| System | Unique HSL per node                            | Slate (#475569)                                   |
+| Domain | Unique HSL per node                            | Parent System's background                        |
+| Module | Unique HSL per node                            | Parent Domain's background                        |
+| Symbol | Kind-based (function=teal, class=purple, etc.) | Parent Module's background (or unclassified gray) |
 
-**Symbol-to-Construct Mapping System:**
+**Symbol-to-Module Mapping System:**
 
 Uses an inheritance model with three levels of specificity:
 
@@ -64,17 +86,17 @@ Resolution priority: Symbol > File > Directory (most specific wins)
 1. **`src/renderer/src/lib/colorUtils.ts`** - Deterministic color generation
    - `generateNodeColors(nodeId)` - Hash-based HSL color from node ID
    - `buildColorMap(systems, domains, modules)` - Builds color map with parent inheritance
-   - `getSymbolBorderColor(constructId, colorMap)` - Gets border color for symbols
+   - `getSymbolBorderColor(moduleId, colorMap)` - Gets border color for symbols
    - `UNCLASSIFIED_BORDER_COLOR` - Gray border for unmapped symbols
 
 **Files Modified:**
 
 1. **`src/main/types.ts`** - Added new types:
    - `parentId?: string` on `SemanticNode` - For border color inheritance
-   - `ConstructMapping` interface - `{ directories?, files?, symbols? }`
-   - `ModuleNode.mappings?: ConstructMapping` - New mapping system
+   - `ModuleMapping` interface - `{ directories?, files?, symbols? }`
+   - `ModuleNode.mappings?: ModuleMapping` - New mapping system
 
-2. **`src/preload/index.d.ts`** - Re-exported `ConstructMapping` type
+2. **`src/preload/index.d.ts`** - Re-exported `ModuleMapping` type
 
 3. **`src/renderer/src/store/graphStore.ts`**:
    - Added `colorMap: ColorMap` to store state
@@ -83,8 +105,8 @@ Resolution priority: Symbol > File > Directory (most specific wins)
    - Updated `loadSymbols()` to pass modules/colorMap to symbolsToNodes
 
 4. **`src/renderer/src/store/symbolHelpers.ts`**:
-   - Added `resolveSymbolConstruct(symbolId, modules)` - Inheritance-based resolution
-   - Added `getSymbolStyleWithConstructBorder()` - Construct-aware styling
+   - Added `resolveSymbolModule(symbolId, modules)` - Inheritance-based resolution
+   - Added `getSymbolStyleWithModuleBorder()` - Module-aware styling
    - Updated `symbolsToNodes()` to accept modules/colorMap for border coloring
    - Added `matchesDirectoryPattern()` - Glob pattern matching (\* and \*\*)
    - Added `getPatternSpecificity()` - Most specific directory wins
@@ -135,11 +157,11 @@ loadSymbols()
   ├── Get symbols from extractor
   ├── symbolsToNodes(symbols, modules, colorMap)
   │     └── For each symbol:
-  │           ├── resolveSymbolConstruct(symbolId, modules)
+  │           ├── resolveSymbolModule(symbolId, modules)
   │           │     ├── Check symbol mappings (highest priority)
   │           │     ├── Check file mappings
   │           │     └── Check directory mappings (most specific wins)
-  │           └── getSymbolBorderColor(constructId, colorMap)
+  │           └── getSymbolBorderColor(moduleId, colorMap)
   └── Layout and store
 ```
 
@@ -178,13 +200,13 @@ loadSymbols()
 
 - `src/renderer/src/lib/colorUtils.ts` - Color generation and mapping
 - `src/renderer/src/store/graphStore.ts` - Node creation with colors
-- `src/renderer/src/store/symbolHelpers.ts` - Symbol-to-construct resolution
+- `src/renderer/src/store/symbolHelpers.ts` - Symbol-to-module resolution
 
 **Semantic System:**
 
 - `src/main/semanticAnalyzer.ts` - LLM analysis with mapping prompt
 - `src/main/cacheManager.ts` - `.graph-ide/` cache management
-- `src/main/types.ts` - SemanticNode, ConstructMapping types
+- `src/main/types.ts` - SemanticNode, ModuleMapping types
 
 ## Testing
 
@@ -198,5 +220,5 @@ npm run dev        # Start development server
 
 - Test with actual semantic analysis to verify color generation
 - Delete cached `.graph-ide/` to force re-analysis with new prompt
-- Add UI indicator showing which construct a symbol belongs to
-- Consider adding legend/key for construct colors
+- Add UI indicator showing which module a symbol belongs to
+- Consider adding legend/key for module colors

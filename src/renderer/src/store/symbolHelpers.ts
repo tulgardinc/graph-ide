@@ -3,7 +3,7 @@ import type { ExtractedSymbol, SymbolKind, CallEdge, ModuleNode } from '../../..
 import { getSymbolBorderColor, type ColorMap } from '../lib/colorUtils'
 
 // =============================================================================
-// SYMBOL-TO-CONSTRUCT RESOLUTION
+// SYMBOL-TO-MODULE RESOLUTION
 // =============================================================================
 
 import type { ProjectSymbols } from '../../../preload/index.d'
@@ -57,7 +57,7 @@ function getPatternSpecificity(pattern: string): number {
 }
 
 /**
- * Resolve which construct/module a symbol belongs to using the inheritance system:
+ * Resolve which module a symbol belongs to using the inheritance system:
  * 1. Symbol-level mapping (highest priority)
  * 2. File-level mapping
  * 3. Directory-level mapping (most specific directory wins)
@@ -66,10 +66,7 @@ function getPatternSpecificity(pattern: string): number {
  * @param modules - Array of module nodes with their mappings
  * @returns The module ID that this symbol belongs to, or undefined if unclassified
  */
-export function resolveSymbolConstruct(
-  symbolId: string,
-  modules: ModuleNode[]
-): string | undefined {
+export function resolveSymbolModule(symbolId: string, modules: ModuleNode[]): string | undefined {
   // Parse symbolId to get file path
   const colonIndex = symbolId.lastIndexOf(':')
   if (colonIndex === -1) return undefined
@@ -125,8 +122,8 @@ export function resolveSymbolConstruct(
 }
 
 /**
- * Get all symbol IDs that belong to a specific module/construct
- * This is a reverse lookup of resolveSymbolConstruct()
+ * Get all symbol IDs that belong to a specific module
+ * This is a reverse lookup of resolveSymbolModule()
  *
  * @param moduleId - The module ID to find symbols for (e.g., "module:auth")
  * @param modules - Array of module nodes with their mappings
@@ -147,7 +144,7 @@ export function getSymbolsForModule(
   // Note: We exclude types and interfaces since they're not rendered as nodes
   return allSymbols
     .filter((symbol) => symbol.kind !== 'type' && symbol.kind !== 'interface')
-    .filter((symbol) => resolveSymbolConstruct(symbol.id, modules) === moduleId)
+    .filter((symbol) => resolveSymbolModule(symbol.id, modules) === moduleId)
     .map((symbol) => symbol.id)
 }
 
@@ -234,16 +231,16 @@ export function getSymbolPrefix(kind: SymbolKind): string {
 // =============================================================================
 
 /**
- * Get visual styling for a symbol with construct-based border color
+ * Get visual styling for a symbol with module-based border color
  *
  * @param kind - Symbol kind (function, class, etc.)
  * @param exported - Whether the symbol is exported
- * @param constructBorderColor - Border color from parent construct (or unclassified color)
+ * @param moduleBorderColor - Border color from parent module (or unclassified color)
  */
-export function getSymbolStyleWithConstructBorder(
+export function getSymbolStyleWithModuleBorder(
   kind: SymbolKind,
   exported: boolean,
-  constructBorderColor: string
+  moduleBorderColor: string
 ): React.CSSProperties {
   const baseStyle: React.CSSProperties = {
     borderRadius: '6px',
@@ -274,7 +271,7 @@ export function getSymbolStyleWithConstructBorder(
     ...baseStyle,
     background,
     color,
-    border: `${borderWidth} ${borderStyle} ${constructBorderColor}`
+    border: `${borderWidth} ${borderStyle} ${moduleBorderColor}`
   }
 }
 
@@ -283,8 +280,8 @@ export function getSymbolStyleWithConstructBorder(
  * Filters out types and interfaces (they're kept in the extractor but not rendered)
  *
  * @param symbols - Extracted symbols from the codebase
- * @param modules - Optional module nodes for construct resolution
- * @param colorMap - Optional color map for construct-based border colors
+ * @param modules - Optional module nodes for module resolution
+ * @param colorMap - Optional color map for module-based border colors
  */
 export function symbolsToNodes(
   symbols: ExtractedSymbol[],
@@ -297,19 +294,19 @@ export function symbolsToNodes(
   )
 
   return renderableSymbols.map((symbol) => {
-    // Resolve construct and get border color if modules/colorMap provided
+    // Resolve module and get border color if modules/colorMap provided
     let borderColor: string | undefined
-    let constructId: string | undefined
+    let moduleId: string | undefined
 
     if (modules && colorMap) {
-      constructId = resolveSymbolConstruct(symbol.id, modules)
-      borderColor = getSymbolBorderColor(constructId, colorMap)
+      moduleId = resolveSymbolModule(symbol.id, modules)
+      borderColor = getSymbolBorderColor(moduleId, colorMap)
     }
 
-    // Use construct-based styling if available, otherwise use kind-based styling
+    // Use module-based styling if available, otherwise use kind-based styling
     const style = borderColor
       ? {
-          ...getSymbolStyleWithConstructBorder(symbol.kind, symbol.exported, borderColor),
+          ...getSymbolStyleWithModuleBorder(symbol.kind, symbol.exported, borderColor),
           width: Math.max(120, symbol.name.length * 8 + 40)
         }
       : {
@@ -324,7 +321,7 @@ export function symbolsToNodes(
       data: {
         label: `${getSymbolPrefix(symbol.kind)} ${symbol.name}`,
         symbol, // Store the full symbol data for later use
-        constructId // Store which construct this symbol belongs to
+        moduleId // Store which module this symbol belongs to
       },
       style
     }

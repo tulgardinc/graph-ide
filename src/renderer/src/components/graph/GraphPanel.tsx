@@ -20,7 +20,7 @@ import {
 import { ZoomLevelIndicator } from './ZoomLevelIndicator'
 import { NodeDetailPanel } from './NodeDetailPanel'
 import { SemanticNodeDetailPanel } from './SemanticNodeDetailPanel'
-import { resolveSymbolConstruct, getSymbolsForModule } from '../../store/symbolHelpers'
+import { resolveSymbolModule } from '../../store/symbolHelpers'
 import type { ExtractedSymbol, ModuleNode, SemanticNode } from '../../../../preload/index.d'
 
 // Default panel width matches the defaultSize in NodeDetailPanel
@@ -39,7 +39,9 @@ function GraphCanvas(): React.JSX.Element {
     setSelectedNodeIds,
     setZoomLevel,
     semanticAnalysis,
-    projectSymbols
+    setPendingModuleSelectionForSymbols,
+    pendingSymbolIdsToSelect,
+    clearPendingSymbolIdsToSelect
   } = useGraphStore()
   const { fitView, setNodes } = useReactFlow()
 
@@ -116,17 +118,17 @@ function GraphCanvas(): React.JSX.Element {
     return (firstNode.data?.symbol as ExtractedSymbol) ?? null
   }, [selectedNodes, selectedSemanticNode])
 
-  // Get the construct (module) that the selected symbol belongs to
-  const selectedSymbolConstructInfo = useMemo(() => {
+  // Get the module that the selected symbol belongs to
+  const selectedSymbolModuleInfo = useMemo(() => {
     if (!selectedSymbol || !semanticAnalysis) return undefined
 
     const modules = semanticAnalysis.modules as ModuleNode[]
-    const constructId = resolveSymbolConstruct(selectedSymbol.id, modules)
+    const moduleId = resolveSymbolModule(selectedSymbol.id, modules)
 
-    if (!constructId) return undefined
+    if (!moduleId) return undefined
 
     // Find the module to get its name
-    const module = modules.find((m) => m.id === constructId)
+    const module = modules.find((m) => m.id === moduleId)
     if (!module) return undefined
 
     return {
@@ -207,17 +209,17 @@ function GraphCanvas(): React.JSX.Element {
     setDetailPanelOpen(false)
   }, [])
 
-  // Handle navigation from detail panel to construct (zoom level change)
-  const handleNavigateToConstruct = useCallback(
-    (constructId: string) => {
+  // Handle navigation from detail panel to module (zoom level change)
+  const handleNavigateToModule = useCallback(
+    (moduleId: string) => {
       // Close detail panel (we're leaving symbol view)
       setDetailPanelOpen(false)
       // Clear local selection state
       setSelectedNodes([])
-      // Change to construct zoom level
-      setZoomLevel('construct')
-      // Select the construct node (will be highlighted after zoom change)
-      setSelectedNodeIds([constructId])
+      // Change to module zoom level
+      setZoomLevel('module')
+      // Select the module node (will be highlighted after zoom change)
+      setSelectedNodeIds([moduleId])
     },
     [setZoomLevel, setSelectedNodeIds]
   )
@@ -226,11 +228,11 @@ function GraphCanvas(): React.JSX.Element {
   const handleNavigateToSemanticParent = useCallback(
     (parentId: string) => {
       // Determine target zoom level from parent ID
-      let targetLevel: 'system' | 'layer' | 'construct' = 'system'
+      let targetLevel: 'system' | 'domain' | 'module' = 'system'
       if (parentId.startsWith('domain:')) {
-        targetLevel = 'layer'
+        targetLevel = 'domain'
       } else if (parentId.startsWith('module:')) {
-        targetLevel = 'construct'
+        targetLevel = 'module'
       }
 
       // Close detail panel temporarily
@@ -248,9 +250,9 @@ function GraphCanvas(): React.JSX.Element {
   const handleNavigateToSemanticChild = useCallback(
     (childId: string) => {
       // Determine target zoom level from child ID
-      let targetLevel: 'system' | 'layer' | 'construct' = 'construct'
+      let targetLevel: 'system' | 'domain' | 'module' = 'module'
       if (childId.startsWith('domain:')) {
-        targetLevel = 'layer'
+        targetLevel = 'domain'
       } else if (childId.startsWith('system:')) {
         targetLevel = 'system'
       }
@@ -294,7 +296,7 @@ function GraphCanvas(): React.JSX.Element {
 
       // Helper to navigate and select using React Flow's selection system
       const navigateAndSelect = (
-        targetLevel: 'layer' | 'construct' | 'symbol',
+        targetLevel: 'domain' | 'module' | 'symbol',
         childIds: string[]
       ): void => {
         // Close detail panel
@@ -310,36 +312,41 @@ function GraphCanvas(): React.JSX.Element {
         }, 100)
       }
 
-      // Handle system nodes -> drill down to layer level
+      // Handle system nodes -> drill down to domain level
       if (nodeId.startsWith('system:')) {
         const system = semanticAnalysis.systems.find((s) => s.id === nodeId)
         if (system?.children.length) {
-          navigateAndSelect('layer', system.children)
+          navigateAndSelect('domain', system.children)
         }
         return
       }
 
-      // Handle domain nodes -> drill down to construct level
+      // Handle domain nodes -> drill down to module level
       if (nodeId.startsWith('domain:')) {
         const domain = semanticAnalysis.domains.find((d) => d.id === nodeId)
         if (domain?.children.length) {
-          navigateAndSelect('construct', domain.children)
+          navigateAndSelect('module', domain.children)
         }
         return
       }
 
       // Handle module nodes -> drill down to symbol level
+      // NOTE: For modules, we can't compute child symbols here because projectSymbols
+      // may not be loaded yet (symbols are lazy-loaded). Instead, we set a pending
+      // selection that will be applied by loadSymbols() after symbols are loaded.
       if (nodeId.startsWith('module:')) {
-        const modules = semanticAnalysis.modules as ModuleNode[]
-        // Find all symbols belonging to this module
-        const childSymbolIds = getSymbolsForModule(nodeId, modules, projectSymbols)
-        navigateAndSelect('symbol', childSymbolIds)
+        // Close detail panel
+        setDetailPanelOpen(false)
+        // Set pending module selection - this will be processed by loadSymbols()
+        setPendingModuleSelectionForSymbols(nodeId)
+        // Navigate to symbol level (triggers loadSymbols() which will apply selection)
+        setZoomLevel('symbol')
         return
       }
 
       // Symbol level: no further drill-down (already at lowest level)
     },
-    [semanticAnalysis, projectSymbols, setZoomLevel, selectNodesByIds]
+    [semanticAnalysis, setZoomLevel, selectNodesByIds, setPendingModuleSelectionForSymbols]
   )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
@@ -426,6 +433,26 @@ function GraphCanvas(): React.JSX.Element {
     doLayout()
   }, [zoomLevel, nodes.length, layoutCurrentLevel, fitView])
 
+  // Apply pending symbol selection after symbols are loaded
+  // This effect watches for pendingSymbolIdsToSelect from the store (set by loadSymbols)
+  // and applies the selection through React Flow's setNodes, ensuring React Flow
+  // remains the source of truth for selection state
+  useEffect(() => {
+    if (pendingSymbolIdsToSelect.length > 0 && rawNodes.length > 0) {
+      console.log(
+        '[GraphPanel] Applying pending symbol selection:',
+        pendingSymbolIdsToSelect.length,
+        'symbols'
+      )
+      // Use setTimeout to ensure nodes are rendered before selecting
+      setTimeout(() => {
+        selectNodesByIds(pendingSymbolIdsToSelect)
+        // Clear the pending selection after applying
+        clearPendingSymbolIdsToSelect()
+      }, 150)
+    }
+  }, [pendingSymbolIdsToSelect, rawNodes.length, selectNodesByIds, clearPendingSymbolIdsToSelect])
+
   return (
     <>
       <ReactFlow
@@ -466,8 +493,8 @@ function GraphCanvas(): React.JSX.Element {
           graphNodeIds={graphNodeIds}
           onNavigateToSymbol={handleNavigateToSymbol}
           onResize={setDetailPanelWidth}
-          constructInfo={selectedSymbolConstructInfo}
-          onNavigateToConstruct={handleNavigateToConstruct}
+          moduleInfo={selectedSymbolModuleInfo}
+          onNavigateToModule={handleNavigateToModule}
         />
       )}
 
