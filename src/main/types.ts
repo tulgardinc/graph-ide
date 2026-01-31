@@ -13,8 +13,8 @@ export interface SemanticNode {
   id: string
   /** Human-readable name */
   name: string
-  /** Description of what this semantic unit represents */
-  description: string
+  /** Short summary of what this semantic unit represents */
+  summary: string
   /** Which layer this node belongs to */
   layer: SemanticLayer
   /** ID of the parent node (for border color inheritance) */

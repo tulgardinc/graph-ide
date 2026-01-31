@@ -28,6 +28,14 @@ import {
 } from './llmClient'
 import { analyzeSemantics, getCachedAnalysis, hasValidAnalysis } from './semanticAnalyzer'
 import { invalidateCache, getCacheInfo } from './cacheManager'
+import {
+  initializeGenerator,
+  startEagerGeneration,
+  requestDescription,
+  getCachedDescription,
+  isGenerating,
+  getQueueStatus
+} from './descriptionGenerator'
 
 // =============================================================================
 // PROJECT PATH FROM CLI ARGUMENTS
@@ -398,6 +406,129 @@ app.whenReady().then(() => {
     }
 
     return await getCacheInfo(projectPath)
+  })
+
+  // =============================================================================
+  // IPC HANDLERS FOR DESCRIPTION GENERATION
+  // =============================================================================
+
+  /**
+   * Initialize description generator and start eager generation
+   * Called after semantic analysis completes
+   */
+  ipcMain.handle('description:startEager', (event) => {
+    const webContents = event.sender
+
+    if (!projectPath) {
+      console.error('[Main] Cannot start description generation: no project path')
+      return false
+    }
+
+    // Get the cached analysis to initialize the generator
+    getCachedAnalysis(projectPath).then((analysis) => {
+      if (!analysis) {
+        console.error('[Main] Cannot start description generation: no analysis cached')
+        return
+      }
+
+      // Initialize the generator with callbacks that send events to renderer
+      initializeGenerator(projectPath!, analysis, {
+        onStart: (nodeId) => {
+          webContents.send('description:loading', { nodeId })
+        },
+        onComplete: (nodeId, content) => {
+          webContents.send('description:complete', { nodeId, content })
+        },
+        onError: (nodeId, error) => {
+          webContents.send('description:error', { nodeId, error })
+        },
+        onProgress: (nodeId, status) => {
+          webContents.send('description:progress', { nodeId, status })
+        }
+      })
+
+      // Start eager generation for systems and domains
+      startEagerGeneration()
+    })
+
+    return true
+  })
+
+  /**
+   * Request a description for a specific node
+   * Returns cached content if available, otherwise triggers generation
+   */
+  ipcMain.handle('description:request', (event, nodeId: string) => {
+    const webContents = event.sender
+
+    if (!projectPath) {
+      return { cached: false, content: null, generating: false }
+    }
+
+    // Check if already cached
+    const cached = getCachedDescription(projectPath, nodeId)
+    if (cached) {
+      return { cached: true, content: cached, generating: false }
+    }
+
+    // Check if already generating
+    if (isGenerating(nodeId)) {
+      return { cached: false, content: null, generating: true }
+    }
+
+    // Get the analysis and initialize generator if needed
+    getCachedAnalysis(projectPath).then((analysis) => {
+      if (!analysis) {
+        webContents.send('description:error', { nodeId, error: 'No analysis available' })
+        return
+      }
+
+      // Initialize the generator (safe to call multiple times)
+      initializeGenerator(projectPath!, analysis, {
+        onStart: (id) => {
+          webContents.send('description:loading', { nodeId: id })
+        },
+        onComplete: (id, content) => {
+          webContents.send('description:complete', { nodeId: id, content })
+        },
+        onError: (id, error) => {
+          webContents.send('description:error', { nodeId: id, error })
+        },
+        onProgress: (id, status) => {
+          webContents.send('description:progress', { nodeId: id, status })
+        }
+      })
+
+      // Request the description (will queue for generation)
+      requestDescription(nodeId)
+    })
+
+    return { cached: false, content: null, generating: true }
+  })
+
+  /**
+   * Get cached description without triggering generation
+   */
+  ipcMain.handle('description:getCached', (_, nodeId: string) => {
+    if (!projectPath) {
+      return null
+    }
+
+    return getCachedDescription(projectPath, nodeId)
+  })
+
+  /**
+   * Check if a node's description is being generated
+   */
+  ipcMain.handle('description:isGenerating', (_, nodeId: string) => {
+    return isGenerating(nodeId)
+  })
+
+  /**
+   * Get the current description generation queue status
+   */
+  ipcMain.handle('description:queueStatus', () => {
+    return getQueueStatus()
   })
 
   // Initialize LLM client with env var (dotenv has loaded by now)

@@ -49,6 +49,24 @@ export interface SemanticCacheInfo {
 }
 
 /**
+ * Result from description request
+ */
+export interface DescriptionRequestResult {
+  cached: boolean
+  content: string | null
+  generating: boolean
+}
+
+/**
+ * Description generation queue status
+ */
+export interface DescriptionQueueStatus {
+  isProcessing: boolean
+  queueLength: number
+  currentItem: string | null
+}
+
+/**
  * API exposed to the renderer process via contextBridge
  */
 interface MapIdeAPI {
@@ -192,6 +210,66 @@ interface MapIdeAPI {
    * Returns an unsubscribe function
    */
   onSemanticToolEnd: (callback: (data: { toolName: string; result: string }) => void) => () => void
+
+  // ==========================================================================
+  // Description Generation API
+  // ==========================================================================
+
+  /**
+   * Start eager description generation for systems and domains
+   * Should be called after semantic analysis completes
+   */
+  descriptionStartEager: () => Promise<boolean>
+
+  /**
+   * Request a description for a specific node
+   * Returns cached content immediately if available
+   * Otherwise triggers background generation and returns { generating: true }
+   */
+  descriptionRequest: (nodeId: string) => Promise<DescriptionRequestResult>
+
+  /**
+   * Get cached description without triggering generation
+   */
+  descriptionGetCached: (nodeId: string) => Promise<string | null>
+
+  /**
+   * Check if a node's description is being generated
+   */
+  descriptionIsGenerating: (nodeId: string) => Promise<boolean>
+
+  /**
+   * Get the current description generation queue status
+   */
+  descriptionQueueStatus: () => Promise<DescriptionQueueStatus>
+
+  /**
+   * Subscribe to description loading events (generation started)
+   * Returns an unsubscribe function
+   */
+  onDescriptionLoading: (callback: (data: { nodeId: string }) => void) => () => void
+
+  /**
+   * Subscribe to description complete events
+   * Returns an unsubscribe function
+   */
+  onDescriptionComplete: (
+    callback: (data: { nodeId: string; content: string }) => void
+  ) => () => void
+
+  /**
+   * Subscribe to description error events
+   * Returns an unsubscribe function
+   */
+  onDescriptionError: (callback: (data: { nodeId: string; error: string }) => void) => () => void
+
+  /**
+   * Subscribe to description progress events
+   * Returns an unsubscribe function
+   */
+  onDescriptionProgress: (
+    callback: (data: { nodeId: string; status: string }) => void
+  ) => () => void
 }
 
 declare global {

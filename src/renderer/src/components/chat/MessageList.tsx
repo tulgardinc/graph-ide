@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import CodeMirror from '@uiw/react-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
-import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView } from '@codemirror/view'
+import { oneDark } from '@codemirror/theme-one-dark'
 
 export interface Message {
   id: string
@@ -48,7 +48,8 @@ function CodeBlock({ code, language }: { code: string; language: string }): Reac
 }
 
 /**
- * Custom components for ReactMarkdown to style the rendered content
+ * Custom code component for CodeMirror syntax highlighting
+ * All other elements use Tailwind typography (prose) classes
  */
 const markdownComponents = {
   // Code blocks with CodeMirror syntax highlighting
@@ -61,70 +62,13 @@ const markdownComponents = {
     const code = String(children).replace(/\n$/, '')
 
     if (isInline) {
-      return (
-        <code className="px-1.5 py-0.5 bg-slate-700/50 text-cyan-300 rounded text-xs font-mono">
-          {children}
-        </code>
-      )
+      // Inline code - let prose handle it but override some styles
+      return <code className="!bg-slate-700/50 !text-cyan-300">{children}</code>
     }
 
+    // Block code - use CodeMirror for syntax highlighting
     return <CodeBlock code={code} language={language} />
-  },
-
-  // Paragraphs
-  p: ({ children }: { children?: React.ReactNode }) => <p className="mb-2 last:mb-0">{children}</p>,
-
-  // Headers
-  h1: ({ children }: { children?: React.ReactNode }) => (
-    <h1 className="text-lg font-bold mb-2 text-slate-100">{children}</h1>
-  ),
-  h2: ({ children }: { children?: React.ReactNode }) => (
-    <h2 className="text-base font-bold mb-2 text-slate-100">{children}</h2>
-  ),
-  h3: ({ children }: { children?: React.ReactNode }) => (
-    <h3 className="text-sm font-bold mb-1 text-slate-200">{children}</h3>
-  ),
-
-  // Lists
-  ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>
-  ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>
-  ),
-  li: ({ children }: { children?: React.ReactNode }) => (
-    <li className="text-slate-200">{children}</li>
-  ),
-
-  // Links
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
-    >
-      {children}
-    </a>
-  ),
-
-  // Blockquotes
-  blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="border-l-2 border-cyan-500/50 pl-3 my-2 text-slate-300 italic">
-      {children}
-    </blockquote>
-  ),
-
-  // Strong and emphasis
-  strong: ({ children }: { children?: React.ReactNode }) => (
-    <strong className="font-semibold text-slate-100">{children}</strong>
-  ),
-  em: ({ children }: { children?: React.ReactNode }) => (
-    <em className="italic text-slate-300">{children}</em>
-  ),
-
-  // Horizontal rule
-  hr: () => <hr className="my-3 border-slate-700" />
+  }
 }
 
 export function MessageList({ messages }: MessageListProps): React.JSX.Element {
@@ -147,8 +91,8 @@ export function MessageList({ messages }: MessageListProps): React.JSX.Element {
                 </div>
               </div>
             ) : (
-              // Assistant messages: full width, no bubble
-              <div className="w-full min-w-0 overflow-hidden text-sm leading-relaxed text-slate-200">
+              // Assistant messages: full width with prose styling
+              <div className="prose prose-invert prose-sm max-w-none prose-headings:text-slate-100 prose-p:text-slate-200 prose-strong:text-slate-100 prose-a:text-cyan-400 prose-code:text-cyan-300 prose-code:bg-slate-700/50 prose-li:text-slate-200 prose-li:marker:text-slate-500 prose-blockquote:border-cyan-500/50 prose-blockquote:text-slate-300">
                 <ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
               </div>
             )}

@@ -1,5 +1,39 @@
 # Active Context
 
+## Latest Implementation: LLM-Generated Descriptions for Semantic Nodes (January 31, 2026)
+
+### Completed Features
+
+1. **Description Generator** (`src/main/descriptionGenerator.ts`)
+   - Queue-based generation with priority levels (0=on-demand, 1=system, 2=domain)
+   - Memory + disk caching at `.graph-ide/llm-outputs/{node-id}.md`
+   - Uses LLM with tool calling to explore codebase before writing descriptions
+   - Event-driven progress updates via IPC
+
+2. **Eager Generation**
+   - Systems and domains auto-generate after semantic analysis completes
+   - Background processing with 500ms delay between requests to avoid rate limiting
+
+3. **Lazy Generation**
+   - Construct/module descriptions generated on-demand when user opens detail panel
+   - Higher priority (0) than eager generation
+
+4. **SemanticNodeDetailPanel** (`src/renderer/src/components/graph/SemanticNodeDetailPanel.tsx`)
+   - Shows loading spinner while descriptions generate
+   - Markdown rendering with react-markdown
+   - Parent/children navigation badges
+   - Refresh button to regenerate descriptions
+
+5. **API Surface**
+   - `descriptionStartEager()` - Start background generation for systems/domains
+   - `descriptionRequest(nodeId)` - Get or generate description
+   - `descriptionGetCached(nodeId)` - Check cache without triggering generation
+   - `descriptionIsGenerating(nodeId)` - Check if generation in progress
+   - `descriptionQueueStatus()` - Get queue status
+   - Events: `onDescriptionLoading`, `onDescriptionComplete`, `onDescriptionError`, `onDescriptionProgress`
+
+---
+
 ## Current Focus
 
 ### Visual Hierarchy System (January 31, 2026)

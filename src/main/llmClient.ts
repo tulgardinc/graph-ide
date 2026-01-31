@@ -253,8 +253,8 @@ export async function sendMessageWithTools(
     content: msg.content
   }))
 
-  // Create abort controller for cancellation
-  activeAbortController = new AbortController()
+  // Create local abort controller for this request (to avoid race conditions with concurrent requests)
+  const localAbortController = new AbortController()
 
   let fullResponse = ''
   let currentIterationText = '' // Track text for current iteration only
@@ -267,7 +267,7 @@ export async function sendMessageWithTools(
       console.log(`[LLM] Tool loop iteration ${iterationCount}`)
 
       // Check for cancellation
-      if (activeAbortController?.signal.aborted) {
+      if (localAbortController.signal.aborted) {
         console.log('[LLM] Cancelled during tool loop')
         break
       }
@@ -286,7 +286,7 @@ export async function sendMessageWithTools(
           ...(systemPrompt ? { system: systemPrompt } : {})
         },
         {
-          signal: activeAbortController.signal
+          signal: localAbortController.signal
         }
       )
 

@@ -244,6 +244,113 @@ const api = {
     }
     ipcRenderer.on('semantic:toolEnd', handler)
     return () => ipcRenderer.removeListener('semantic:toolEnd', handler)
+  },
+
+  // ==========================================================================
+  // Description Generation API
+  // ==========================================================================
+
+  /**
+   * Start eager description generation for systems and domains
+   * Should be called after semantic analysis completes
+   */
+  descriptionStartEager: (): Promise<boolean> => {
+    return ipcRenderer.invoke('description:startEager')
+  },
+
+  /**
+   * Request a description for a specific node
+   * Returns cached content immediately if available
+   * Otherwise triggers background generation and returns { generating: true }
+   */
+  descriptionRequest: (
+    nodeId: string
+  ): Promise<{ cached: boolean; content: string | null; generating: boolean }> => {
+    return ipcRenderer.invoke('description:request', nodeId)
+  },
+
+  /**
+   * Get cached description without triggering generation
+   */
+  descriptionGetCached: (nodeId: string): Promise<string | null> => {
+    return ipcRenderer.invoke('description:getCached', nodeId)
+  },
+
+  /**
+   * Check if a node's description is being generated
+   */
+  descriptionIsGenerating: (nodeId: string): Promise<boolean> => {
+    return ipcRenderer.invoke('description:isGenerating', nodeId)
+  },
+
+  /**
+   * Get the current description generation queue status
+   */
+  descriptionQueueStatus: (): Promise<{
+    isProcessing: boolean
+    queueLength: number
+    currentItem: string | null
+  }> => {
+    return ipcRenderer.invoke('description:queueStatus')
+  },
+
+  /**
+   * Subscribe to description loading events (generation started)
+   */
+  onDescriptionLoading: (callback: (data: { nodeId: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { nodeId: string }): void => {
+      callback(data)
+    }
+    ipcRenderer.on('description:loading', handler)
+    return () => ipcRenderer.removeListener('description:loading', handler)
+  },
+
+  /**
+   * Subscribe to description complete events
+   */
+  onDescriptionComplete: (
+    callback: (data: { nodeId: string; content: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { nodeId: string; content: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('description:complete', handler)
+    return () => ipcRenderer.removeListener('description:complete', handler)
+  },
+
+  /**
+   * Subscribe to description error events
+   */
+  onDescriptionError: (
+    callback: (data: { nodeId: string; error: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { nodeId: string; error: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('description:error', handler)
+    return () => ipcRenderer.removeListener('description:error', handler)
+  },
+
+  /**
+   * Subscribe to description progress events
+   */
+  onDescriptionProgress: (
+    callback: (data: { nodeId: string; status: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { nodeId: string; status: string }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('description:progress', handler)
+    return () => ipcRenderer.removeListener('description:progress', handler)
   }
 }
 

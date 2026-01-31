@@ -50,10 +50,6 @@ export const UNCLASSIFIED_BORDER_COLOR = '#71717a' // zinc-500 - neutral gray
 /** Text color for unclassified symbols */
 export const UNCLASSIFIED_TEXT_COLOR = '#a1a1aa' // zinc-400
 
-// Text color generation parameters - vibrant and glowing
-const TEXT_SATURATION = { min: 75, max: 90 } // High saturation for vibrancy
-const TEXT_LIGHTNESS = { min: 60, max: 72 } // Bright enough to glow on dark bg
-
 // =============================================================================
 // HASH FUNCTION
 // =============================================================================
@@ -69,13 +65,6 @@ function hashString(str: string): number {
     hash = (hash << 5) + hash + char // hash * 33 + char
   }
   return Math.abs(hash)
-}
-
-/**
- * Convert hash to a value within a range
- */
-function hashToRange(hash: number, min: number, max: number): number {
-  return min + (hash % (max - min + 1))
 }
 
 // =============================================================================
@@ -109,10 +98,6 @@ export function generateNodeColors(nodeId: string): NodeColors {
   // Add slight variation based on hash to make similar IDs distinguishable
   const hueVariation = ((hash >> 8) % 20) - 10 // -10 to +10 degrees
   hue = (hue + hueVariation + 360) % 360
-
-  // Generate vibrant text color
-  const textSaturation = hashToRange(hash >> 12, TEXT_SATURATION.min, TEXT_SATURATION.max)
-  const textLightness = hashToRange(hash >> 20, TEXT_LIGHTNESS.min, TEXT_LIGHTNESS.max)
 
   return {
     background: SEMANTIC_NODE_BACKGROUND,
@@ -262,10 +247,10 @@ export function buildColorMap(
  * Get colors for a symbol based on its parent construct
  *
  * @param constructId - The construct/module this symbol belongs to (or undefined if unclassified)
- * @param colorMap - Pre-built color map
+ * @param _colorMap - Pre-built color map (kept for API consistency)
  * @returns Border color for the symbol
  */
-export function getSymbolBorderColor(constructId: string | undefined, colorMap: ColorMap): string {
+export function getSymbolBorderColor(constructId: string | undefined, _colorMap: ColorMap): string {
   if (!constructId) {
     return UNCLASSIFIED_BORDER_COLOR
   }

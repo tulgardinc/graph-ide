@@ -1,10 +1,12 @@
 import type { Node, Edge } from '@xyflow/react'
 import type { ExtractedSymbol, SymbolKind, CallEdge, ModuleNode } from '../../../preload/index.d'
-import { UNCLASSIFIED_BORDER_COLOR, getSymbolBorderColor, type ColorMap } from '../lib/colorUtils'
+import { getSymbolBorderColor, type ColorMap } from '../lib/colorUtils'
 
 // =============================================================================
 // SYMBOL-TO-CONSTRUCT RESOLUTION
 // =============================================================================
+
+import type { ProjectSymbols } from '../../../preload/index.d'
 
 /**
  * Check if a file path matches a directory pattern
@@ -68,12 +70,11 @@ export function resolveSymbolConstruct(
   symbolId: string,
   modules: ModuleNode[]
 ): string | undefined {
-  // Parse symbolId to get file path and symbol name
+  // Parse symbolId to get file path
   const colonIndex = symbolId.lastIndexOf(':')
   if (colonIndex === -1) return undefined
 
   const filePath = symbolId.slice(0, colonIndex)
-  const symbolName = symbolId.slice(colonIndex + 1)
 
   // Priority 1: Check for exact symbol mapping
   for (const module of modules) {
@@ -121,6 +122,33 @@ export function resolveSymbolConstruct(
   }
 
   return bestMatch?.moduleId
+}
+
+/**
+ * Get all symbol IDs that belong to a specific module/construct
+ * This is a reverse lookup of resolveSymbolConstruct()
+ *
+ * @param moduleId - The module ID to find symbols for (e.g., "module:auth")
+ * @param modules - Array of module nodes with their mappings
+ * @param projectSymbols - The loaded project symbols
+ * @returns Array of symbol IDs that belong to this module
+ */
+export function getSymbolsForModule(
+  moduleId: string,
+  modules: ModuleNode[],
+  projectSymbols: ProjectSymbols | null
+): string[] {
+  if (!projectSymbols) return []
+
+  // Get all symbols from the project
+  const allSymbols = projectSymbols.files.flatMap((file) => file.symbols)
+
+  // Filter to symbols that resolve to this module
+  // Note: We exclude types and interfaces since they're not rendered as nodes
+  return allSymbols
+    .filter((symbol) => symbol.kind !== 'type' && symbol.kind !== 'interface')
+    .filter((symbol) => resolveSymbolConstruct(symbol.id, modules) === moduleId)
+    .map((symbol) => symbol.id)
 }
 
 // =============================================================================

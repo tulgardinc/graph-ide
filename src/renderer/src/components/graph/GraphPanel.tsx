@@ -19,8 +19,9 @@ import {
 } from '../../store/graphStore'
 import { ZoomLevelIndicator } from './ZoomLevelIndicator'
 import { NodeDetailPanel } from './NodeDetailPanel'
-import { resolveSymbolConstruct } from '../../store/symbolHelpers'
-import type { ExtractedSymbol, ModuleNode } from '../../../../preload/index.d'
+import { SemanticNodeDetailPanel } from './SemanticNodeDetailPanel'
+import { resolveSymbolConstruct, getSymbolsForModule } from '../../store/symbolHelpers'
+import type { ExtractedSymbol, ModuleNode, SemanticNode } from '../../../../preload/index.d'
 
 // Default panel width matches the defaultSize in NodeDetailPanel
 const DEFAULT_DETAIL_PANEL_WIDTH = 400
@@ -37,11 +38,36 @@ function GraphCanvas(): React.JSX.Element {
     layoutCurrentLevel,
     setSelectedNodeIds,
     setZoomLevel,
-    semanticAnalysis
+    semanticAnalysis,
+    projectSymbols
   } = useGraphStore()
-  const { fitView } = useReactFlow()
+  const { fitView, setNodes } = useReactFlow()
 
-  // Track selected nodes for the info panel
+  // =============================================================================
+  // SELECTION STATE
+  // =============================================================================
+  //
+  // IMPORTANT: React Flow is the source of truth for node selection.
+  //
+  // There are two selection-related states:
+  // 1. React Flow's internal selection (node.selected property)
+  //    - This is the source of truth
+  //    - Managed by React Flow when user clicks nodes
+  //    - Can be programmatically set via setNodes() with selected: true/false
+  //    - Triggers onSelectionChange callback when changed
+  //
+  // 2. selectedNodeIds (Zustand store) and selectedNodes (local state)
+  //    - These are DERIVED from React Flow's selection via onSelectionChange
+  //    - Used for highlighting (dimming unconnected nodes) and UI (detail panel)
+  //    - DO NOT set these directly - always go through React Flow's selection
+  //
+  // To programmatically select nodes:
+  //   ✅ Use setNodes() to set node.selected = true, which triggers onSelectionChange
+  //   ❌ Don't use setSelectedNodeIds() directly - this bypasses React Flow
+  //
+  // =============================================================================
+
+  // Track selected nodes for the info panel (derived from React Flow's selection)
   const [selectedNodes, setSelectedNodes] = useState<Node[]>([])
   // Track if detail panel is open (user can close it even when node is selected)
   const [detailPanelOpen, setDetailPanelOpen] = useState(false)
@@ -61,13 +87,34 @@ function GraphCanvas(): React.JSX.Element {
     [setSelectedNodeIds]
   )
 
-  // Get the first selected symbol for the detail panel
+  // Determine if selected node is a semantic node (system, domain, module)
+  const selectedSemanticNode: SemanticNode | null = useMemo(() => {
+    if (selectedNodes.length === 0 || !semanticAnalysis) return null
+    const firstNode = selectedNodes[0]
+    const nodeId = firstNode.id
+
+    // Check if this is a semantic node by ID prefix
+    if (nodeId.startsWith('system:')) {
+      return semanticAnalysis.systems.find((s) => s.id === nodeId) ?? null
+    }
+    if (nodeId.startsWith('domain:')) {
+      return semanticAnalysis.domains.find((d) => d.id === nodeId) ?? null
+    }
+    if (nodeId.startsWith('module:')) {
+      return semanticAnalysis.modules.find((m) => m.id === nodeId) ?? null
+    }
+
+    return null
+  }, [selectedNodes, semanticAnalysis])
+
+  // Get the first selected symbol for the detail panel (only if not a semantic node)
   const selectedSymbol: ExtractedSymbol | null = useMemo(() => {
     if (selectedNodes.length === 0) return null
+    if (selectedSemanticNode) return null // If semantic node, don't show symbol panel
     const firstNode = selectedNodes[0]
     // Symbol is stored in node.data.symbol by symbolsToNodes() in graphStore
     return (firstNode.data?.symbol as ExtractedSymbol) ?? null
-  }, [selectedNodes])
+  }, [selectedNodes, selectedSemanticNode])
 
   // Get the construct (module) that the selected symbol belongs to
   const selectedSymbolConstructInfo = useMemo(() => {
@@ -87,6 +134,54 @@ function GraphCanvas(): React.JSX.Element {
       name: module.name
     }
   }, [selectedSymbol, semanticAnalysis])
+
+  // Get parent info for the selected semantic node
+  const semanticNodeParentInfo = useMemo(() => {
+    if (!selectedSemanticNode || !semanticAnalysis) return undefined
+
+    const parentId = selectedSemanticNode.parentId
+    if (!parentId) return undefined
+
+    // Find the parent in systems or domains
+    const parentSystem = semanticAnalysis.systems.find((s) => s.id === parentId)
+    if (parentSystem) {
+      return { id: parentSystem.id, name: parentSystem.name, layer: 'system' }
+    }
+
+    const parentDomain = semanticAnalysis.domains.find((d) => d.id === parentId)
+    if (parentDomain) {
+      return { id: parentDomain.id, name: parentDomain.name, layer: 'domain' }
+    }
+
+    return undefined
+  }, [selectedSemanticNode, semanticAnalysis])
+
+  // Get children info for the selected semantic node
+  const semanticNodeChildrenInfo = useMemo(() => {
+    if (!selectedSemanticNode || !semanticAnalysis) return undefined
+
+    const childIds = selectedSemanticNode.children || []
+    if (childIds.length === 0) return undefined
+
+    const children: Array<{ id: string; name: string }> = []
+
+    for (const childId of childIds) {
+      // Look in domains
+      const domain = semanticAnalysis.domains.find((d) => d.id === childId)
+      if (domain) {
+        children.push({ id: domain.id, name: domain.name })
+        continue
+      }
+
+      // Look in modules
+      const module = semanticAnalysis.modules.find((m) => m.id === childId)
+      if (module) {
+        children.push({ id: module.id, name: module.name })
+      }
+    }
+
+    return children.length > 0 ? children : undefined
+  }, [selectedSemanticNode, semanticAnalysis])
 
   // Create a Set of all node IDs in the graph (for checking navigability)
   const graphNodeIds = useMemo(() => {
@@ -125,6 +220,126 @@ function GraphCanvas(): React.JSX.Element {
       setSelectedNodeIds([constructId])
     },
     [setZoomLevel, setSelectedNodeIds]
+  )
+
+  // Handle navigation from semantic node to parent
+  const handleNavigateToSemanticParent = useCallback(
+    (parentId: string) => {
+      // Determine target zoom level from parent ID
+      let targetLevel: 'system' | 'layer' | 'construct' = 'system'
+      if (parentId.startsWith('domain:')) {
+        targetLevel = 'layer'
+      } else if (parentId.startsWith('module:')) {
+        targetLevel = 'construct'
+      }
+
+      // Close detail panel temporarily
+      setDetailPanelOpen(false)
+      setSelectedNodes([])
+
+      // Change zoom level and select parent
+      setZoomLevel(targetLevel)
+      setSelectedNodeIds([parentId])
+    },
+    [setZoomLevel, setSelectedNodeIds]
+  )
+
+  // Handle navigation from semantic node to child
+  const handleNavigateToSemanticChild = useCallback(
+    (childId: string) => {
+      // Determine target zoom level from child ID
+      let targetLevel: 'system' | 'layer' | 'construct' = 'construct'
+      if (childId.startsWith('domain:')) {
+        targetLevel = 'layer'
+      } else if (childId.startsWith('system:')) {
+        targetLevel = 'system'
+      }
+
+      // Close detail panel temporarily
+      setDetailPanelOpen(false)
+      setSelectedNodes([])
+
+      // Change zoom level and select child
+      setZoomLevel(targetLevel)
+      setSelectedNodeIds([childId])
+    },
+    [setZoomLevel, setSelectedNodeIds]
+  )
+
+  // Helper to programmatically select nodes through React Flow
+  // This ensures selection goes through React Flow's system, triggering onSelectionChange
+  const selectNodesByIds = useCallback(
+    (nodeIds: string[]) => {
+      if (nodeIds.length === 0) return
+
+      const nodeIdSet = new Set(nodeIds)
+      // Use setNodes to mark nodes as selected - this triggers onSelectionChange
+      setNodes((currentNodes) =>
+        currentNodes.map((n) => ({
+          ...n,
+          selected: nodeIdSet.has(n.id)
+        }))
+      )
+    },
+    [setNodes]
+  )
+
+  // Handle double-click drill-down navigation
+  // When a node is double-clicked, navigate to the lower zoom level and select all child nodes
+  const handleNodeDoubleClick = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      const nodeId = node.id
+
+      if (!semanticAnalysis) return
+
+      // Helper to navigate and select using React Flow's selection system
+      const navigateAndSelect = (
+        targetLevel: 'layer' | 'construct' | 'symbol',
+        childIds: string[]
+      ): void => {
+        // Close detail panel
+        setDetailPanelOpen(false)
+        // Navigate to target level
+        setZoomLevel(targetLevel)
+        // Select children after a brief delay to ensure the new level's nodes are rendered
+        // Use setNodes to properly select through React Flow (triggers onSelectionChange)
+        setTimeout(() => {
+          if (childIds.length > 0) {
+            selectNodesByIds(childIds)
+          }
+        }, 100)
+      }
+
+      // Handle system nodes -> drill down to layer level
+      if (nodeId.startsWith('system:')) {
+        const system = semanticAnalysis.systems.find((s) => s.id === nodeId)
+        if (system?.children.length) {
+          navigateAndSelect('layer', system.children)
+        }
+        return
+      }
+
+      // Handle domain nodes -> drill down to construct level
+      if (nodeId.startsWith('domain:')) {
+        const domain = semanticAnalysis.domains.find((d) => d.id === nodeId)
+        if (domain?.children.length) {
+          navigateAndSelect('construct', domain.children)
+        }
+        return
+      }
+
+      // Handle module nodes -> drill down to symbol level
+      if (nodeId.startsWith('module:')) {
+        const modules = semanticAnalysis.modules as ModuleNode[]
+        // Find all symbols belonging to this module
+        const childSymbolIds = getSymbolsForModule(nodeId, modules, projectSymbols)
+        navigateAndSelect('symbol', childSymbolIds)
+        return
+      }
+
+      // Symbol level: no further drill-down (already at lowest level)
+    },
+    [semanticAnalysis, projectSymbols, setZoomLevel, selectNodesByIds]
   )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
@@ -220,6 +435,7 @@ function GraphCanvas(): React.JSX.Element {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onSelectionChange={onSelectionChange}
+        onNodeDoubleClick={handleNodeDoubleClick}
         // Selection configuration:
         // - Click = select single node (default behavior)
         // - Shift+Click = add to multi-selection (multiSelectionKeyCode)
@@ -237,7 +453,9 @@ function GraphCanvas(): React.JSX.Element {
 
       {/* Zoom level indicator - offset when detail panel is open */}
       <ZoomLevelIndicator
-        leftOffset={detailPanelOpen && selectedSymbol ? detailPanelWidth + 32 : 16}
+        leftOffset={
+          detailPanelOpen && (selectedSymbol || selectedSemanticNode) ? detailPanelWidth + 32 : 16
+        }
       />
 
       {/* Node detail panel - shows when a symbol node is selected and panel is open */}
@@ -253,11 +471,29 @@ function GraphCanvas(): React.JSX.Element {
         />
       )}
 
+      {/* Semantic node detail panel - shows when a semantic node is selected */}
+      {detailPanelOpen && selectedSemanticNode && (
+        <SemanticNodeDetailPanel
+          node={selectedSemanticNode}
+          onClose={handleCloseDetailPanel}
+          onResize={setDetailPanelWidth}
+          parentInfo={semanticNodeParentInfo}
+          onNavigateToParent={handleNavigateToSemanticParent}
+          childrenInfo={semanticNodeChildrenInfo}
+          onNavigateToChild={handleNavigateToSemanticChild}
+        />
+      )}
+
       {/* Selection info panel - offset when detail panel is open */}
       {selectedNodes.length > 0 && (
         <div
           className="absolute bottom-4 rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 backdrop-blur-sm z-0 transition-[left] duration-150"
-          style={{ left: detailPanelOpen && selectedSymbol ? detailPanelWidth + 32 : 16 }}
+          style={{
+            left:
+              detailPanelOpen && (selectedSymbol || selectedSemanticNode)
+                ? detailPanelWidth + 32
+                : 16
+          }}
         >
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
             Selected ({selectedNodes.length})

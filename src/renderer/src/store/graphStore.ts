@@ -10,20 +10,8 @@ import {
   addEdge
 } from '@xyflow/react'
 import { getLayoutedElements } from '../lib/elkLayout'
-import {
-  buildColorMap,
-  type ColorMap,
-  type ColorMapEntry,
-  SYSTEM_BORDER_COLOR
-} from '../lib/colorUtils'
-import type {
-  ProjectSymbols,
-  ExtractedSymbol,
-  SemanticAnalysis,
-  SystemNode,
-  DomainNode,
-  ModuleNode
-} from '../../../preload/index.d'
+import { buildColorMap, type ColorMap, type ColorMapEntry } from '../lib/colorUtils'
+import type { ProjectSymbols, ExtractedSymbol, SemanticAnalysis } from '../../../preload/index.d'
 
 // Import from split files
 import { type ZoomLevel, LAYOUT_OPTIONS } from './types'
@@ -66,20 +54,20 @@ const LAYER_BASE_STYLES: Record<string, React.CSSProperties> = {
  * @param label - Display label
  * @param layer - Semantic layer type
  * @param colors - Colors from the color map (background, text, border)
- * @param description - Optional description
+ * @param summary - Optional summary
  */
 function createSemanticNode(
   id: string,
   label: string,
   layer: 'system' | 'domain' | 'module',
   colors: ColorMapEntry,
-  description?: string
+  summary?: string
 ): Node {
   return {
     id,
     type: 'default',
     position: { x: 0, y: 0 },
-    data: { label, description, layer },
+    data: { label, summary, layer },
     style: {
       ...LAYER_BASE_STYLES[layer],
       background: colors.background,
@@ -237,15 +225,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       // Convert semantic nodes to React Flow nodes with dynamic colors
       const systemNodes = analysis.systems.map((s) => {
         const colors = colorMap.get(s.id)!
-        return createSemanticNode(s.id, s.name, 'system', colors, s.description)
+        return createSemanticNode(s.id, s.name, 'system', colors, s.summary)
       })
       const domainNodes = analysis.domains.map((d) => {
         const colors = colorMap.get(d.id)!
-        return createSemanticNode(d.id, d.name, 'domain', colors, d.description)
+        return createSemanticNode(d.id, d.name, 'domain', colors, d.summary)
       })
       const moduleNodes = analysis.modules.map((m) => {
         const colors = colorMap.get(m.id)!
-        return createSemanticNode(m.id, m.name, 'module', colors, m.description)
+        return createSemanticNode(m.id, m.name, 'module', colors, m.summary)
       })
 
       // Create edges from semantic edges
