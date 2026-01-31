@@ -172,7 +172,7 @@ export function getSymbolStyle(kind: SymbolKind, exported: boolean): React.CSSPr
     class: {
       background: '#1e1b4b',
       color: '#a5b4fc',
-      border: exported ? '2px solid #8b5cf6' : '1px solid #8b5cf6'
+      border: exported ? '2px solid #c026d3' : '1px solid #c026d3'
     },
     interface: {
       background: '#172554',
@@ -182,7 +182,7 @@ export function getSymbolStyle(kind: SymbolKind, exported: boolean): React.CSSPr
     type: {
       background: '#1e1b4b',
       color: '#c4b5fd',
-      border: exported ? '2px dashed #8b5cf6' : '1px dashed #8b5cf6'
+      border: exported ? '2px dashed #c026d3' : '1px dashed #c026d3'
     },
     enum: {
       background: '#422006',
@@ -364,7 +364,7 @@ export function dependencyEdgesToFlowEdges(dependencyEdges: CallEdge[]): Edge[] 
         strokeDasharray = undefined
         break
       case 'class-instantiation':
-        strokeColor = '#a855f7' // Purple
+        strokeColor = '#c026d3' // Fuchsia (matches class node color)
         strokeWidth = 2
         strokeDasharray = undefined
         break

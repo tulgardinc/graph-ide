@@ -209,6 +209,24 @@ function GraphCanvas(): React.JSX.Element {
     setDetailPanelOpen(false)
   }, [])
 
+  // Helper to programmatically select nodes through React Flow
+  // This ensures selection goes through React Flow's system, triggering onSelectionChange
+  const selectNodesByIds = useCallback(
+    (nodeIds: string[]) => {
+      if (nodeIds.length === 0) return
+
+      const nodeIdSet = new Set(nodeIds)
+      // Use setNodes to mark nodes as selected - this triggers onSelectionChange
+      setNodes((currentNodes) =>
+        currentNodes.map((n) => ({
+          ...n,
+          selected: nodeIdSet.has(n.id)
+        }))
+      )
+    },
+    [setNodes]
+  )
+
   // Handle navigation from detail panel to module (zoom level change)
   const handleNavigateToModule = useCallback(
     (moduleId: string) => {
@@ -218,10 +236,10 @@ function GraphCanvas(): React.JSX.Element {
       setSelectedNodes([])
       // Change to module zoom level
       setZoomLevel('module')
-      // Select the module node (will be highlighted after zoom change)
-      setSelectedNodeIds([moduleId])
+      // Select through React Flow after nodes are rendered (source of truth for selection)
+      setTimeout(() => selectNodesByIds([moduleId]), 100)
     },
-    [setZoomLevel, setSelectedNodeIds]
+    [setZoomLevel, selectNodesByIds]
   )
 
   // Handle navigation from semantic node to parent
@@ -239,11 +257,12 @@ function GraphCanvas(): React.JSX.Element {
       setDetailPanelOpen(false)
       setSelectedNodes([])
 
-      // Change zoom level and select parent
+      // Change zoom level
       setZoomLevel(targetLevel)
-      setSelectedNodeIds([parentId])
+      // Select through React Flow after nodes are rendered (source of truth for selection)
+      setTimeout(() => selectNodesByIds([parentId]), 100)
     },
-    [setZoomLevel, setSelectedNodeIds]
+    [setZoomLevel, selectNodesByIds]
   )
 
   // Handle navigation from semantic node to child
@@ -261,29 +280,12 @@ function GraphCanvas(): React.JSX.Element {
       setDetailPanelOpen(false)
       setSelectedNodes([])
 
-      // Change zoom level and select child
+      // Change zoom level
       setZoomLevel(targetLevel)
-      setSelectedNodeIds([childId])
+      // Select through React Flow after nodes are rendered (source of truth for selection)
+      setTimeout(() => selectNodesByIds([childId]), 100)
     },
-    [setZoomLevel, setSelectedNodeIds]
-  )
-
-  // Helper to programmatically select nodes through React Flow
-  // This ensures selection goes through React Flow's system, triggering onSelectionChange
-  const selectNodesByIds = useCallback(
-    (nodeIds: string[]) => {
-      if (nodeIds.length === 0) return
-
-      const nodeIdSet = new Set(nodeIds)
-      // Use setNodes to mark nodes as selected - this triggers onSelectionChange
-      setNodes((currentNodes) =>
-        currentNodes.map((n) => ({
-          ...n,
-          selected: nodeIdSet.has(n.id)
-        }))
-      )
-    },
-    [setNodes]
+    [setZoomLevel, selectNodesByIds]
   )
 
   // Handle double-click drill-down navigation
@@ -350,10 +352,23 @@ function GraphCanvas(): React.JSX.Element {
   )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
+  // NOTE: Do NOT set the `selected` property here - React Flow manages selection state
+  // through onNodesChange -> applyNodeChanges. The rawNodes already have `selected`
+  // set correctly. We only apply visual styling (dimming, highlight ring) based on
+  // selectedNodeIds (which is derived from onSelectionChange).
   const nodes = useMemo(() => {
-    // No selection - return nodes as-is
+    // No selection - return nodes with any selection styling explicitly removed
+    // We need to remove boxShadow/opacity that may have been persisted to the store
+    // from previous selection styling (via onNodesChange)
     if (selectedNodeIds.size === 0) {
-      return rawNodes
+      return rawNodes.map((node) => ({
+        ...node,
+        style: {
+          ...node.style,
+          boxShadow: undefined, // Remove selection highlight
+          opacity: undefined // Reset opacity (removes dimming)
+        }
+      }))
     }
 
     // Compute connected nodes (selected + predecessors + successors)
