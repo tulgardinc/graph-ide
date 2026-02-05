@@ -18,7 +18,13 @@ import { type ZoomLevel, LAYOUT_OPTIONS } from './types'
 import { symbolsToNodes, dependencyEdgesToFlowEdges, getSymbolsForModule } from './symbolHelpers'
 
 // Re-export types and helpers for consumers
-export { type ZoomLevel, ZOOM_LEVELS, ZOOM_LEVEL_LABELS, LAYOUT_OPTIONS } from './types'
+export {
+  type ZoomLevel,
+  ZOOM_LEVELS,
+  ALL_ZOOM_LEVELS,
+  ZOOM_LEVEL_LABELS,
+  LAYOUT_OPTIONS
+} from './types'
 export { getConnectedNodeIds, isEdgeConnected } from './selectionHelpers'
 
 // =============================================================================
@@ -95,6 +101,10 @@ interface GraphState {
   // Selection state for highlighting
   selectedNodeIds: Set<string>
 
+  // Active module for symbol view (null when not in symbol view)
+  // When set, symbol view shows only symbols from this module
+  activeModuleId: string | null
+
   // Pending module selection for drill-down navigation
   // When drilling from module to symbol, we need to wait for symbols to load
   // before we can determine which symbols belong to the module
@@ -134,6 +144,8 @@ interface GraphState {
   loadSymbols: () => Promise<void>
   resetSymbols: () => void
   loadSemanticAnalysis: (forceRefresh?: boolean) => Promise<void>
+  openModuleSymbolView: (moduleId: string) => Promise<void>
+  closeSymbolView: () => void
 }
 
 // =============================================================================
@@ -159,6 +171,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   layoutedLevels: new Set<ZoomLevel>(),
   selectedNodeIds: new Set<string>(),
+  activeModuleId: null,
   pendingModuleSelectionForSymbols: null,
   pendingSymbolIdsToSelect: [],
 
@@ -544,6 +557,84 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       nodesByLevel: { system: [], domain: [], module: [], symbol: [] },
       edgesByLevel: { system: [], domain: [], module: [], symbol: [] },
       layoutedLevels: new Set([...layoutedLevels].filter((l) => l !== 'symbol'))
+    })
+  },
+
+  openModuleSymbolView: async (moduleId: string) => {
+    const { projectSymbols, semanticAnalysis, colorMap } = get()
+
+    set({
+      activeModuleId: moduleId,
+      zoomLevel: 'symbol',
+      symbolsLoading: true,
+      symbolsError: null
+    })
+
+    try {
+      // Load symbols if not already loaded
+      let symbols = projectSymbols
+      if (!symbols) {
+        const projectPath = await window.api.getProjectPath()
+        if (!projectPath) {
+          set({ symbolsLoading: false, symbolsError: 'No project path set.' })
+          return
+        }
+        symbols = await window.api.scanProject()
+      }
+
+      const modules = semanticAnalysis?.modules
+      if (!modules) {
+        set({ symbolsLoading: false, symbolsError: 'No semantic analysis available.' })
+        return
+      }
+
+      // Import the helper function
+      const { buildModuleSymbolView } = await import('./symbolHelpers')
+
+      // Build the module-specific symbol view
+      const { nodes, edges } = buildModuleSymbolView(
+        moduleId,
+        symbols,
+        modules,
+        colorMap,
+        get().nodesByLevel.module
+      )
+
+      // Layout the nodes
+      let layoutedNodes = nodes
+      if (nodes.length > 0) {
+        try {
+          const { nodes: laidOut } = await getLayoutedElements(nodes, edges, LAYOUT_OPTIONS.symbol)
+          layoutedNodes = laidOut
+        } catch (e) {
+          console.error('[GraphStore] Symbol layout failed:', e)
+        }
+      }
+
+      const currentState = get()
+      set({
+        projectSymbols: symbols,
+        symbolsLoading: false,
+        nodesByLevel: { ...currentState.nodesByLevel, symbol: layoutedNodes },
+        edgesByLevel: { ...currentState.edgesByLevel, symbol: edges },
+        layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol'])
+      })
+    } catch (error) {
+      console.error('[GraphStore] Failed to open module symbol view:', error)
+      set({
+        symbolsLoading: false,
+        symbolsError: error instanceof Error ? error.message : String(error),
+        activeModuleId: null,
+        zoomLevel: 'module'
+      })
+    }
+  },
+
+  closeSymbolView: () => {
+    set({
+      activeModuleId: null,
+      zoomLevel: 'module',
+      selectedNodeIds: new Set()
     })
   }
 }))

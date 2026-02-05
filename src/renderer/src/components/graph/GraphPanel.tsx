@@ -39,9 +39,9 @@ function GraphCanvas(): React.JSX.Element {
     setSelectedNodeIds,
     setZoomLevel,
     semanticAnalysis,
-    setPendingModuleSelectionForSymbols,
     pendingSymbolIdsToSelect,
-    clearPendingSymbolIdsToSelect
+    clearPendingSymbolIdsToSelect,
+    openModuleSymbolView
   } = useGraphStore()
   const { fitView, setNodes } = useReactFlow()
 
@@ -291,16 +291,13 @@ function GraphCanvas(): React.JSX.Element {
   // Handle double-click drill-down navigation
   // When a node is double-clicked, navigate to the lower zoom level and select all child nodes
   const handleNodeDoubleClick = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
+    async (_event: React.MouseEvent, node: Node) => {
       const nodeId = node.id
 
       if (!semanticAnalysis) return
 
       // Helper to navigate and select using React Flow's selection system
-      const navigateAndSelect = (
-        targetLevel: 'domain' | 'module' | 'symbol',
-        childIds: string[]
-      ): void => {
+      const navigateAndSelect = (targetLevel: 'domain' | 'module', childIds: string[]): void => {
         // Close detail panel
         setDetailPanelOpen(false)
         // Navigate to target level
@@ -332,23 +329,18 @@ function GraphCanvas(): React.JSX.Element {
         return
       }
 
-      // Handle module nodes -> drill down to symbol level
-      // NOTE: For modules, we can't compute child symbols here because projectSymbols
-      // may not be loaded yet (symbols are lazy-loaded). Instead, we set a pending
-      // selection that will be applied by loadSymbols() after symbols are loaded.
+      // Handle module nodes -> open module-specific symbol view
       if (nodeId.startsWith('module:')) {
         // Close detail panel
         setDetailPanelOpen(false)
-        // Set pending module selection - this will be processed by loadSymbols()
-        setPendingModuleSelectionForSymbols(nodeId)
-        // Navigate to symbol level (triggers loadSymbols() which will apply selection)
-        setZoomLevel('symbol')
+        // Open the module's symbol view (async - will load symbols and build the view)
+        await openModuleSymbolView(nodeId)
         return
       }
 
       // Symbol level: no further drill-down (already at lowest level)
     },
-    [semanticAnalysis, setZoomLevel, selectNodesByIds, setPendingModuleSelectionForSymbols]
+    [semanticAnalysis, setZoomLevel, selectNodesByIds, openModuleSymbolView]
   )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)

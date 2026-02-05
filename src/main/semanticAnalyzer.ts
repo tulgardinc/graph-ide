@@ -67,9 +67,18 @@ For modules, use an **inheritance-based mapping system** with three levels of sp
 - Assign "src/utils/**" to \`module:validation\`
 - Assign symbol "src/utils/validators.ts:formatApiUrl" to \`module:http-client\`
 
-## Output Format
+## Output Format - CRITICAL INSTRUCTION
 
-After exploring the codebase, you MUST output ONLY a valid JSON object with no additional text, markdown formatting, or explanation. The JSON must match this exact structure:
+After exploring the codebase, you MUST output ONLY a valid JSON object. 
+
+**CRITICAL RULES:**
+1. Your response MUST start with the character '{' immediately
+2. NO text before the JSON (no "I'll analyze", "Here's the analysis", etc.)
+3. NO markdown code blocks (no triple backticks)
+4. NO explanations after the JSON
+5. ONLY the raw JSON object
+
+The JSON must match this exact structure:
 
 {
   "systems": [

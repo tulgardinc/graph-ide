@@ -1,12 +1,16 @@
 import type { Node, Edge } from '@xyflow/react'
-import type { ExtractedSymbol, SymbolKind, CallEdge, ModuleNode } from '../../../preload/index.d'
+import type {
+  ExtractedSymbol,
+  SymbolKind,
+  CallEdge,
+  ModuleNode,
+  ProjectSymbols
+} from '../../../preload/index.d'
 import { getSymbolBorderColor, type ColorMap } from '../lib/colorUtils'
 
 // =============================================================================
 // SYMBOL-TO-MODULE RESOLUTION
 // =============================================================================
-
-import type { ProjectSymbols } from '../../../preload/index.d'
 
 /**
  * Check if a file path matches a directory pattern
@@ -404,4 +408,218 @@ export function dependencyEdgesToFlowEdges(dependencyEdges: CallEdge[]): Edge[] 
       }
     }
   })
+}
+
+// =============================================================================
+// MODULE-SPECIFIC SYMBOL VIEW
+// =============================================================================
+
+/**
+ * Build a symbol view for a specific module with aggregated module-level edges.
+ *
+ * Shows:
+ * - Symbols belonging to the active module
+ * - External module nodes that these symbols depend on
+ * - Edges between symbols in the active module
+ * - Edges from symbols to external module nodes (aggregated)
+ *
+ * @param moduleId - The module ID to show symbols for
+ * @param projectSymbols - All project symbols
+ * @param modules - All module nodes
+ * @param colorMap - Color map for styling
+ * @param moduleNodes - Pre-built module nodes from graph store
+ * @returns Nodes and edges for the module-specific symbol view
+ */
+export function buildModuleSymbolView(
+  moduleId: string,
+  projectSymbols: ProjectSymbols,
+  modules: ModuleNode[],
+  colorMap: ColorMap,
+  moduleNodes: Node[]
+): { nodes: Node[]; edges: Edge[] } {
+  // Get all symbols that belong to this module
+  const allSymbols = projectSymbols.files.flatMap((file) => file.symbols)
+  const moduleSymbolIds = new Set(getSymbolsForModule(moduleId, modules, projectSymbols))
+
+  // Filter to renderable symbols (exclude types/interfaces)
+  const moduleSymbols = allSymbols.filter(
+    (symbol) =>
+      moduleSymbolIds.has(symbol.id) && symbol.kind !== 'type' && symbol.kind !== 'interface'
+  )
+
+  // Create symbol nodes
+  const symbolNodes = symbolsToNodes(moduleSymbols, modules, colorMap)
+
+  // Build a map of all symbol IDs to their module
+  const symbolToModuleMap = new Map<string, string | undefined>()
+  for (const symbol of allSymbols) {
+    symbolToModuleMap.set(symbol.id, resolveSymbolModule(symbol.id, modules))
+  }
+
+  // Get all edges
+  const allEdges = projectSymbols.callEdges || []
+  const internalEdges: Edge[] = []
+
+  // Outbound: edges from active module to external modules
+  const outboundEdgesMap = new Map<string, { targetModuleId: string; types: Set<string> }>()
+  // Inbound: edges from external modules to active module
+  const inboundEdgesMap = new Map<string, { sourceModuleId: string; types: Set<string> }>()
+
+  for (const edge of allEdges) {
+    const sourceModule = symbolToModuleMap.get(edge.source)
+    const targetModule = symbolToModuleMap.get(edge.target)
+
+    if (!sourceModule || !targetModule) continue
+
+    // Outbound: source is in active module, target is external
+    if (sourceModule === moduleId && targetModule !== moduleId) {
+      if (moduleSymbolIds.has(edge.source)) {
+        const edgeKey = `${edge.source}->${targetModule}`
+        const existing = outboundEdgesMap.get(edgeKey)
+        if (existing) {
+          existing.types.add(edge.type)
+        } else {
+          outboundEdgesMap.set(edgeKey, {
+            targetModuleId: targetModule,
+            types: new Set([edge.type])
+          })
+        }
+      }
+    }
+    // Inbound: target is in active module, source is external
+    else if (targetModule === moduleId && sourceModule !== moduleId) {
+      if (moduleSymbolIds.has(edge.target)) {
+        const edgeKey = `${sourceModule}->${edge.target}`
+        const existing = inboundEdgesMap.get(edgeKey)
+        if (existing) {
+          existing.types.add(edge.type)
+        } else {
+          inboundEdgesMap.set(edgeKey, {
+            sourceModuleId: sourceModule,
+            types: new Set([edge.type])
+          })
+        }
+      }
+    }
+    // Internal: both in active module
+    else if (sourceModule === moduleId && targetModule === moduleId) {
+      if (moduleSymbolIds.has(edge.source) && moduleSymbolIds.has(edge.target)) {
+        const flowEdges = dependencyEdgesToFlowEdges([edge])
+        internalEdges.push(...flowEdges)
+      }
+    }
+  }
+
+  // Get unique external modules (both outbound and inbound)
+  const externalModuleIds = new Set<string>()
+  for (const { targetModuleId } of outboundEdgesMap.values()) {
+    externalModuleIds.add(targetModuleId)
+  }
+  for (const { sourceModuleId } of inboundEdgesMap.values()) {
+    externalModuleIds.add(sourceModuleId)
+  }
+
+  // Create external module nodes (reuse existing module nodes but make them visually distinct)
+  const externalModuleNodes: Node[] = []
+  const moduleNodeMap = new Map(moduleNodes.map((n) => [n.id, n]))
+
+  for (const externalModuleId of externalModuleIds) {
+    const existingNode = moduleNodeMap.get(externalModuleId)
+    if (existingNode) {
+      // Clone the node but make it visually distinct as an external dependency
+      externalModuleNodes.push({
+        ...existingNode,
+        data: {
+          ...existingNode.data,
+          isExternal: true
+        },
+        style: {
+          ...existingNode.style,
+          opacity: 0.6,
+          borderStyle: 'dashed'
+        }
+      })
+    }
+  }
+
+  // Helper function to determine edge styling
+  const getEdgeStyle = (types: Set<string>): { color: string; width: number; dash?: string } => {
+    if (types.has('component-use')) {
+      return { color: '#f472b6', width: 2 }
+    } else if (types.has('class-instantiation')) {
+      return { color: '#c026d3', width: 2 }
+    } else if (types.has('global-write')) {
+      return { color: '#f97316', width: 2 }
+    } else if (types.has('global-read')) {
+      return { color: '#fbbf24', width: 1.5, dash: '4,2' }
+    }
+    return { color: '#22d3ee', width: 1.5 }
+  }
+
+  // Create aggregated outbound edges (symbol -> external module)
+  const externalEdges: Edge[] = []
+  for (const [edgeKey, { targetModuleId, types }] of outboundEdgesMap) {
+    const [sourceSymbolId] = edgeKey.split('->')
+    const style = getEdgeStyle(types)
+
+    externalEdges.push({
+      id: edgeKey,
+      source: sourceSymbolId,
+      target: targetModuleId,
+      type: 'default',
+      animated: false,
+      style: {
+        stroke: style.color,
+        strokeWidth: style.width,
+        strokeDasharray: style.dash
+      },
+      markerEnd: {
+        type: 'arrowclosed' as const,
+        color: style.color,
+        width: 12,
+        height: 12
+      },
+      data: {
+        isAggregated: true,
+        direction: 'outbound',
+        edgeTypes: Array.from(types)
+      }
+    })
+  }
+
+  // Create aggregated inbound edges (external module -> symbol)
+  for (const [edgeKey, { sourceModuleId, types }] of inboundEdgesMap) {
+    const [, targetSymbolId] = edgeKey.split('->')
+    const style = getEdgeStyle(types)
+
+    externalEdges.push({
+      id: edgeKey,
+      source: sourceModuleId,
+      target: targetSymbolId,
+      type: 'default',
+      animated: false,
+      style: {
+        stroke: style.color,
+        strokeWidth: style.width,
+        strokeDasharray: style.dash
+      },
+      markerEnd: {
+        type: 'arrowclosed' as const,
+        color: style.color,
+        width: 12,
+        height: 12
+      },
+      data: {
+        isAggregated: true,
+        direction: 'inbound',
+        edgeTypes: Array.from(types)
+      }
+    })
+  }
+
+  // Combine all nodes and edges
+  return {
+    nodes: [...symbolNodes, ...externalModuleNodes],
+    edges: [...internalEdges, ...externalEdges]
+  }
 }

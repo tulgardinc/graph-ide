@@ -4,9 +4,14 @@ import type { ElkLayoutOptions } from '../lib/elkLayout'
 // ZOOM LEVEL TYPES
 // =============================================================================
 
+// All possible levels including internal views
 export type ZoomLevel = 'system' | 'domain' | 'module' | 'symbol'
 
-export const ZOOM_LEVELS: ZoomLevel[] = ['system', 'domain', 'module', 'symbol']
+// Levels shown in the zoom navigator (symbol is accessed via module double-click)
+export const ZOOM_LEVELS: ZoomLevel[] = ['system', 'domain', 'module']
+
+// All levels including internal views
+export const ALL_ZOOM_LEVELS: ZoomLevel[] = ['system', 'domain', 'module', 'symbol']
 
 export const ZOOM_LEVEL_LABELS: Record<ZoomLevel, string> = {
   system: 'System',
