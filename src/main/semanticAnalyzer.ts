@@ -1,75 +1,71 @@
 /**
- * Semantic Analyzer
+ * 5-Step Semantic Analyzer
  *
- * Uses LLM with tool calling to analyze the codebase and generate
- * semantic nodes for layers 1-3 (System, Domain, Module).
+ * Implements the new analysis pipeline:
+ * 1. (LLM) Identify systems - project goals and top-level architecture
+ * 2. (LLM) Identify modules with code mappings
+ * 3. (LLM) Infer domains from systems + modules
+ * 4. (Algorithmic) Module dependencies from symbol call edges
+ * 5. (Algorithmic) Domain + System dependencies from module edges
+ *
+ * Each step is cached independently for resumable analysis.
  */
 
 import { sendMessageWithTools } from './llmClient'
-import { loadSemanticAnalysis, saveSemanticAnalysis, isCacheValid } from './cacheManager'
-import type { SemanticAnalysis, SystemNode, DomainNode, ModuleNode, SemanticEdge } from './types'
+import {
+  loadStepCache,
+  saveStepCache,
+  isStepCacheValid,
+  getCompletedSteps,
+  invalidateStepCaches,
+  isStepAnalysisComplete,
+  getStepCacheManifest
+} from './cacheManager'
+import type {
+  SemanticAnalysis,
+  SystemNode,
+  DomainNode,
+  ModuleNode,
+  SemanticEdge,
+  AnalysisStep,
+  Step1SystemsResult,
+  Step2ModulesResult,
+  Step3DomainsResult,
+  Step4ModuleEdgesResult,
+  Step5DomainEdgesResult,
+  ProjectSymbols,
+  DependencyEdge
+} from './types'
 
 // =============================================================================
-// SYSTEM PROMPT
+// STEP PROMPTS
 // =============================================================================
 
-const SEMANTIC_ANALYSIS_SYSTEM_PROMPT = `You are a code architecture analyst. Your task is to analyze a codebase and identify its semantic structure across three levels:
+const STEP1_SYSTEMS_PROMPT = `You are a code architecture analyst. Your task is to analyze a codebase and identify its top-level SYSTEMS.
 
-## The Three Semantic Layers
+## System Level (Layer 1)
 
-1. **System Level** (Layer 1 - highest): Major architectural components
-   - Examples: "Frontend Application", "Backend API", "CLI Tool", "Shared Libraries"
-   - These are the broadest groupings, often corresponding to deployable units
+Systems are the highest-level architectural components of a project:
+- Examples: "Frontend Application", "Backend API", "CLI Tool", "Shared Libraries", "Database Layer"
+- These correspond to major deployable units or distinct architectural boundaries
+- Usually map to top-level directories or clear architectural separations
 
-2. **Domain Level** (Layer 2 - middle): Business domains and bounded contexts
-   - Examples: "User Management", "Authentication", "Payment Processing", "Notification System"
-   - These represent business capabilities or feature areas
+## Your Task
 
-3. **Module Level** (Layer 3 - lowest): Logical groupings of related code
-   - Examples: "HTTP Client", "Database Repository", "State Management", "Form Validation"
-   - These are cohesive groups of functions/classes that work together
-
-## Your Process
-
-1. **Start with the file tree**: Use list_files to understand the overall project structure
-2. **Identify systems**: Look at top-level directories to identify major architectural components
-3. **Explore domains**: Examine subdirectories and their purposes
-4. **Identify modules**: Use get_file_symbols to understand what files export, and group related functionality
-5. **Only read files** when you need to understand ambiguous code or import patterns
+Explore the codebase and identify 2-6 systems that represent the major architectural components.
 
 ## Guidelines
 
-- Use directory names and file names as strong signals for grouping
-- Only use read_file when the purpose isn't clear from names alone
-- Every file's exported symbols should belong to exactly one module
-- Every module belongs to exactly one domain
-- Every domain belongs to exactly one system
-- Use kebab-case for IDs (e.g., "module:user-auth", "domain:payment-processing")
+- Look at top-level directory structure first
+- Consider the project's apparent purpose and goals
+- Each system should be a coherent, deployable/architectural unit
+- Systems can be thought of as "what you would deploy separately"
+- Use kebab-case for IDs (e.g., "system:frontend-app")
 - Keep descriptions concise (1-2 sentences)
-- Focus on WHAT code does, not HOW it's implemented
-
-## Module Mapping Strategy (IMPORTANT)
-
-For modules, use an **inheritance-based mapping system** with three levels of specificity:
-
-1. **Directory-level** (most common): Map entire directories to a module
-   - Use \`*\` for direct children only: "src/api/*" matches files in src/api/ but NOT subdirectories
-   - Use \`**\` for recursive: "src/api/**" matches all files under src/api/ including subdirectories
-
-2. **File-level** (when needed): Override the directory mapping for specific files
-   - Use when a file doesn't fit its parent directory's module assignment
-
-3. **Symbol-level** (exception case): Override for individual symbols
-   - Use when a specific function/class in a file belongs to a different module than the rest of the file
-   - This happens when you notice cross-module imports that don't fit the directory structure
-
-**Example scenario**: If \`src/utils/validators.ts\` mostly contains validation logic but also exports \`formatApiUrl()\` which is clearly HTTP-related:
-- Assign "src/utils/**" to \`module:validation\`
-- Assign symbol "src/utils/validators.ts:formatApiUrl" to \`module:http-client\`
 
 ## Output Format - CRITICAL INSTRUCTION
 
-After exploring the codebase, you MUST output ONLY a valid JSON object. 
+After exploring the codebase, you MUST output ONLY a valid JSON object.
 
 **CRITICAL RULES:**
 1. Your response MUST start with the character '{' immediately
@@ -85,72 +81,165 @@ The JSON must match this exact structure:
     {
       "id": "system:system-name",
       "name": "Human Readable Name",
-      "description": "Brief description of this system component",
+      "summary": "Brief description of this system's purpose and role",
       "layer": "system",
-      "children": ["domain:child-domain-id"],
+      "children": [],
       "metadata": {
         "keywords": ["keyword1", "keyword2"],
-        "responsibility": "Main responsibility"
+        "responsibility": "Main architectural responsibility"
       }
-    }
-  ],
-  "domains": [
-    {
-      "id": "domain:domain-name",
-      "name": "Human Readable Name",
-      "description": "Business capability this domain provides",
-      "layer": "domain",
-      "parentId": "system:parent-system-id",
-      "children": ["module:child-module-id"],
-      "metadata": {
-        "keywords": ["keyword1"]
-      }
-    }
-  ],
-  "modules": [
-    {
-      "id": "module:module-name",
-      "name": "Human Readable Name",
-      "description": "What this module does",
-      "layer": "module",
-      "parentId": "domain:parent-domain-id",
-      "children": [],
-      "mappings": {
-        "directories": ["src/auth/**", "src/login/*"],
-        "files": ["src/utils/authHelpers.ts"],
-        "symbols": ["src/utils/validators.ts:validateToken"]
-      },
-      "metadata": {
-        "keywords": ["authentication", "login"]
-      }
-    }
-  ],
-  "edges": [
-    {
-      "id": "source-id->target-id",
-      "source": "domain:auth",
-      "target": "domain:user-management",
-      "type": "depends-on"
     }
   ]
 }
 
-### Mapping Rules:
-- **directories**: Use glob patterns. \`*\` = direct children, \`**\` = recursive
-- **files**: Specific file paths that override their directory's assignment
-- **symbols**: Specific symbol IDs (format: "filePath:symbolName") that override their file's assignment
+IMPORTANT: Do not include domains or modules. Only identify systems at this stage.`
+
+const STEP2_MODULES_PROMPT = `You are a code architecture analyst. Your task is to identify MODULES in this codebase.
+
+## Module Level (Layer 3)
+
+Modules are logical groupings of related code that work together:
+- Examples: "HTTP Client", "Database Repository", "Authentication Logic", "Form Validation"
+- These are cohesive units of functionality
+- They group functions, classes, and related symbols that collaborate
+
+## Your Task
+
+1. Explore the codebase structure
+2. Examine file contents and exports (use get_file_symbols)
+3. Identify 5-20 modules that represent distinct functional areas
+4. Map code to modules using the mapping system below
+
+## Module Mapping Strategy (IMPORTANT)
+
+Use an **inheritance-based mapping system** with three levels of specificity:
+
+1. **Directory-level** (most common): Map entire directories to a module
+   - Use \`*\` for direct children only: "src/api/*" matches files in src/api/ but NOT subdirectories
+   - Use \`**\` for recursive: "src/api/**" matches all files under src/api/ including subdirectories
+
+2. **File-level** (when needed): Override the directory mapping for specific files
+   - Use when a file doesn't fit its parent directory's module assignment
+
+3. **Symbol-level** (exception case): Override for individual symbols
+   - Use when a specific function/class in a file belongs to a different module
+   - Format: "src/utils/validators.ts:formatApiUrl"
+
+## Guidelines
+
+- Every file's exported symbols should belong to exactly one module
 - Prefer directory mappings when possible (cheaper to evaluate)
-- Only use symbol-level when you detect cross-module usage during analysis
+- Only use symbol-level when you detect cross-module usage
+- Module names should be descriptive of the functionality
+- Use kebab-case for IDs (e.g., "module:http-client")
+- 5-20 modules is typical for most projects
 
-### Edge types:
-- "contains": Parent contains child (implicit from children arrays)
-- "depends-on": One component uses/imports from another
-- "communicates-with": Components interact at runtime (API calls, events)
+## Output Format - CRITICAL INSTRUCTION
 
-IMPORTANT: Your final response must be ONLY the JSON object. No markdown code blocks, no explanations before or after.`
+Output ONLY a valid JSON object starting with '{'.
+
+**CRITICAL RULES:**
+1. Start with '{' immediately
+2. NO text before the JSON
+3. NO markdown code blocks
+4. NO explanations after
+
+The JSON structure:
+
+{
+  "modules": [
+    {
+      "id": "module:module-name",
+      "name": "Human Readable Name",
+      "summary": "What this module does and its responsibilities",
+      "layer": "module",
+      "parentId": null,
+      "children": [],
+      "mappings": {
+        "directories": ["src/auth/**", "src/login/*"],
+        "files": ["src/utils/authHelpers.ts"],
+        "symbols": ["src/utils/validators.ts:formatToken"]
+      },
+      "metadata": {
+        "keywords": ["authentication", "security"]
+      }
+    }
+  ]
+}
+
+Leave parentId as null - domains will be inferred in the next step.`
+
+const STEP3_DOMAINS_PROMPT = `You are a code architecture analyst. Your task is to infer DOMAINS from the systems and modules.
+
+## Domain Level (Layer 2)
+
+Domains represent business capabilities or bounded contexts:
+- Examples: "User Management", "Authentication", "Payment Processing", "Notification System"
+- These group related modules by business concern
+- Each domain belongs to exactly one system
+- Each module belongs to exactly one domain
+
+## Context from Previous Steps
+
+You have:
+- SYSTEMS identified in step 1 (major architectural components)
+- MODULES identified in step 2 (functional code groupings)
+
+## Your Task
+
+1. Review the systems and their architectural roles
+2. Review all modules and their purposes
+3. Group modules into 3-8 domains based on business/functional similarity
+4. Assign each domain to the most appropriate system
+5. Update each module's parentId to point to its domain
+
+## Guidelines
+
+- Domains should represent business capabilities, not technical layers
+- Consider what the code "does for the business" not "how it's implemented"
+- Each module must belong to exactly one domain
+- Each domain must belong to exactly one system
+- Use kebab-case for IDs (e.g., "domain:user-management")
+- Domain names should be business-oriented (not "utils", "helpers")
+
+## Output Format - CRITICAL INSTRUCTION
+
+Output ONLY a valid JSON object starting with '{'.
+
+**CRITICAL RULES:**
+1. Start with '{' immediately
+2. NO text before the JSON
+3. NO markdown code blocks
+4. NO explanations after
+
+The JSON structure:
+
+{
+  "domains": [
+    {
+      "id": "domain:domain-name",
+      "name": "Human Readable Name",
+      "summary": "Business capability this domain provides",
+      "layer": "domain",
+      "parentId": "system:parent-system-id",
+      "children": ["module:child-module-id-1", "module:child-module-id-2"],
+      "metadata": {
+        "keywords": ["user", "account"]
+      }
+    }
+  ],
+  "updatedModules": [
+    {
+      "id": "module:module-name",
+      "parentId": "domain:parent-domain-id"
+    }
+  ]
+}
+
+Note: Only include modules that need their parentId updated in updatedModules.`
 
 // =============================================================================
-// ANALYSIS TYPES
+// ANALYSIS OPTIONS
 // =============================================================================
 
 export interface AnalyzeOptions {
@@ -166,65 +255,35 @@ export interface AnalysisResult {
   analysis?: SemanticAnalysis
   error?: string
   cached?: boolean
+  completedSteps?: AnalysisStep[]
 }
 
 // =============================================================================
-// JSON PARSING
+// JSON PARSING HELPERS
 // =============================================================================
 
-/**
- * Extract JSON from LLM response (handles potential markdown wrapping)
- */
 function extractJson(response: string): string {
-  // Try to find JSON in code blocks first
   const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (codeBlockMatch) {
     return codeBlockMatch[1].trim()
   }
 
-  // Try to find raw JSON (starts with { and ends with })
   const jsonMatch = response.match(/\{[\s\S]*\}/)
   if (jsonMatch) {
     return jsonMatch[0]
   }
 
-  // Return as-is if no patterns found
   return response.trim()
 }
 
-/**
- * Parse and validate the LLM response
- */
-function parseAnalysisResponse(response: string, projectPath: string): SemanticAnalysis {
+function parseStep1Response(response: string): Step1SystemsResult {
   const jsonStr = extractJson(response)
+  const parsed = JSON.parse(jsonStr)
 
-  let parsed: {
-    systems?: SystemNode[]
-    domains?: DomainNode[]
-    modules?: ModuleNode[]
-    edges?: SemanticEdge[]
-  }
-
-  try {
-    parsed = JSON.parse(jsonStr)
-  } catch (error) {
-    throw new Error(
-      `Failed to parse JSON response: ${error instanceof Error ? error.message : String(error)}`
-    )
-  }
-
-  // Validate required arrays exist
   if (!Array.isArray(parsed.systems)) {
     throw new Error('Response missing "systems" array')
   }
-  if (!Array.isArray(parsed.domains)) {
-    throw new Error('Response missing "domains" array')
-  }
-  if (!Array.isArray(parsed.modules)) {
-    throw new Error('Response missing "modules" array')
-  }
 
-  // Validate each system node
   for (const system of parsed.systems) {
     if (!system.id || !system.name || !system.layer) {
       throw new Error(`Invalid system node: ${JSON.stringify(system)}`)
@@ -232,26 +291,23 @@ function parseAnalysisResponse(response: string, projectPath: string): SemanticA
     if (system.layer !== 'system') {
       throw new Error(`System node has wrong layer: ${system.layer}`)
     }
-    // Ensure children array exists
-    if (!Array.isArray(system.children)) {
-      system.children = []
-    }
   }
 
-  // Validate each domain node
-  for (const domain of parsed.domains) {
-    if (!domain.id || !domain.name || !domain.layer) {
-      throw new Error(`Invalid domain node: ${JSON.stringify(domain)}`)
-    }
-    if (domain.layer !== 'domain') {
-      throw new Error(`Domain node has wrong layer: ${domain.layer}`)
-    }
-    if (!Array.isArray(domain.children)) {
-      domain.children = []
-    }
+  return {
+    step: 1,
+    timestamp: new Date().toISOString(),
+    systems: parsed.systems as SystemNode[]
+  }
+}
+
+function parseStep2Response(response: string): Step2ModulesResult {
+  const jsonStr = extractJson(response)
+  const parsed = JSON.parse(jsonStr)
+
+  if (!Array.isArray(parsed.modules)) {
+    throw new Error('Response missing "modules" array')
   }
 
-  // Validate each module node
   for (const module of parsed.modules) {
     if (!module.id || !module.name || !module.layer) {
       throw new Error(`Invalid module node: ${JSON.stringify(module)}`)
@@ -259,147 +315,669 @@ function parseAnalysisResponse(response: string, projectPath: string): SemanticA
     if (module.layer !== 'module') {
       throw new Error(`Module node has wrong layer: ${module.layer}`)
     }
-    if (!Array.isArray(module.children)) {
-      module.children = []
-    }
   }
 
-  // Validate edges if present
-  const edges = parsed.edges || []
-  for (const edge of edges) {
-    if (!edge.id || !edge.source || !edge.target || !edge.type) {
-      throw new Error(`Invalid edge: ${JSON.stringify(edge)}`)
-    }
-  }
-
-  // Build the analysis result
-  const analysis: SemanticAnalysis = {
-    projectPath,
+  return {
+    step: 2,
     timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    systems: parsed.systems as SystemNode[],
-    domains: parsed.domains as DomainNode[],
-    modules: parsed.modules as ModuleNode[],
-    edges
+    modules: parsed.modules as ModuleNode[]
+  }
+}
+
+function parseStep3Response(
+  response: string,
+  step2Modules: ModuleNode[]
+): { domains: DomainNode[]; updatedModules: ModuleNode[] } {
+  const jsonStr = extractJson(response)
+  const parsed = JSON.parse(jsonStr)
+
+  if (!Array.isArray(parsed.domains)) {
+    throw new Error('Response missing "domains" array')
   }
 
-  return analysis
+  for (const domain of parsed.domains) {
+    if (!domain.id || !domain.name || !domain.layer) {
+      throw new Error(`Invalid domain node: ${JSON.stringify(domain)}`)
+    }
+    if (domain.layer !== 'domain') {
+      throw new Error(`Domain node has wrong layer: ${domain.layer}`)
+    }
+  }
+
+  // Update modules with parentIds from step 3
+  const moduleMap = new Map(step2Modules.map((m) => [m.id, m]))
+  const updatedModules = step2Modules.map((m) => ({ ...m }))
+
+  if (parsed.updatedModules) {
+    for (const update of parsed.updatedModules) {
+      const module = moduleMap.get(update.id)
+      if (module) {
+        const index = updatedModules.findIndex((m) => m.id === update.id)
+        if (index !== -1) {
+          updatedModules[index] = { ...module, parentId: update.parentId }
+        }
+      }
+    }
+  }
+
+  // Also update modules listed in domain.children
+  for (const domain of parsed.domains) {
+    if (domain.children) {
+      for (const moduleId of domain.children) {
+        const index = updatedModules.findIndex((m) => m.id === moduleId)
+        if (index !== -1) {
+          updatedModules[index] = { ...updatedModules[index], parentId: domain.id }
+        }
+      }
+    }
+  }
+
+  return {
+    domains: parsed.domains as DomainNode[],
+    updatedModules
+  }
+}
+
+// =============================================================================
+// STEP EXECUTORS
+// =============================================================================
+
+async function runStep1(
+  projectPath: string,
+  onProgress: (status: string) => void,
+  onToolStart: (toolName: string, description: string) => void,
+  onToolEnd: (toolName: string, result: string) => void
+): Promise<Step1SystemsResult> {
+  onProgress('Step 1/5: Identifying systems...')
+
+  const initialMessage = `Please analyze this codebase and identify its top-level SYSTEMS.
+
+Start by exploring the file structure to understand the overall project layout, then identify the major architectural components (systems).
+
+Begin your exploration now.`
+
+  let fullResponse = ''
+
+  await new Promise<void>((resolve, reject) => {
+    sendMessageWithTools(
+      {
+        messages: [{ role: 'user', content: initialMessage }],
+        systemPrompt: STEP1_SYSTEMS_PROMPT,
+        projectPath,
+        maxTokens: 4096,
+        finalResponseOnly: true
+      },
+      () => {},
+      (error) => reject(error),
+      (response) => {
+        fullResponse = response
+        resolve()
+      },
+      (toolName, description) => {
+        console.log(`[Step1] Tool: ${toolName} - ${description}`)
+        onToolStart(toolName, description)
+      },
+      (toolName, result) => {
+        onToolEnd(toolName, result)
+      }
+    )
+  })
+
+  console.log('[Step1] Response length:', fullResponse.length)
+  return parseStep1Response(fullResponse)
+}
+
+async function runStep2(
+  projectPath: string,
+  step1Result: Step1SystemsResult,
+  onProgress: (status: string) => void,
+  onToolStart: (toolName: string, description: string) => void,
+  onToolEnd: (toolName: string, result: string) => void
+): Promise<Step2ModulesResult> {
+  onProgress('Step 2/5: Identifying modules...')
+
+  const contextInfo = step1Result.systems.map((s) => `- ${s.name}: ${s.summary}`).join('\n')
+
+  const initialMessage = `Please identify MODULES in this codebase.
+
+Systems identified in step 1:
+${contextInfo}
+
+Explore the file structure and examine file contents to understand the codebase's functional organization. Identify modules that represent distinct functional areas.
+
+Begin your exploration now.`
+
+  let fullResponse = ''
+
+  await new Promise<void>((resolve, reject) => {
+    sendMessageWithTools(
+      {
+        messages: [{ role: 'user', content: initialMessage }],
+        systemPrompt: STEP2_MODULES_PROMPT,
+        projectPath,
+        maxTokens: 8192,
+        finalResponseOnly: true
+      },
+      () => {},
+      (error) => reject(error),
+      (response) => {
+        fullResponse = response
+        resolve()
+      },
+      (toolName, description) => {
+        console.log(`[Step2] Tool: ${toolName} - ${description}`)
+        onToolStart(toolName, description)
+      },
+      (toolName, result) => {
+        onToolEnd(toolName, result)
+      }
+    )
+  })
+
+  console.log('[Step2] Response length:', fullResponse.length)
+  return parseStep2Response(fullResponse)
+}
+
+async function runStep3(
+  projectPath: string,
+  step1Result: Step1SystemsResult,
+  step2Result: Step2ModulesResult,
+  onProgress: (status: string) => void,
+  onToolStart: (toolName: string, description: string) => void,
+  onToolEnd: (toolName: string, result: string) => void
+): Promise<{ domains: DomainNode[]; updatedModules: ModuleNode[] }> {
+  onProgress('Step 3/5: Inferring domains...')
+
+  const systemsInfo = step1Result.systems
+    .map((s) => `- ${s.name} (${s.id}): ${s.summary}`)
+    .join('\n')
+
+  const modulesInfo = step2Result.modules
+    .slice(0, 30) // Limit to avoid token limits
+    .map((m) => `- ${m.name} (${m.id}): ${m.summary}`)
+    .join('\n')
+
+  const initialMessage = `Please infer DOMAINS from the systems and modules.
+
+Systems identified:
+${systemsInfo}
+
+Modules identified (first 30):
+${modulesInfo}
+
+${step2Result.modules.length > 30 ? `... and ${step2Result.modules.length - 30} more modules` : ''}
+
+Group the modules into domains based on business/functional similarity. Assign each domain to the most appropriate system. Update each module's parentId to point to its domain.
+
+Begin analysis now.`
+
+  let fullResponse = ''
+
+  await new Promise<void>((resolve, reject) => {
+    sendMessageWithTools(
+      {
+        messages: [{ role: 'user', content: initialMessage }],
+        systemPrompt: STEP3_DOMAINS_PROMPT,
+        projectPath,
+        maxTokens: 8192,
+        finalResponseOnly: true
+      },
+      () => {},
+      (error) => reject(error),
+      (response) => {
+        fullResponse = response
+        resolve()
+      },
+      (toolName, description) => {
+        console.log(`[Step3] Tool: ${toolName} - ${description}`)
+        onToolStart(toolName, description)
+      },
+      (toolName, result) => {
+        onToolEnd(toolName, result)
+      }
+    )
+  })
+
+  console.log('[Step3] Response length:', fullResponse.length)
+  return parseStep3Response(fullResponse, step2Result.modules)
+}
+
+// =============================================================================
+// ALGORITHMIC STEPS (4-5)
+// =============================================================================
+
+function resolveSymbolToModule(symbolId: string, modules: ModuleNode[]): string | undefined {
+  // Extract file path from symbol ID (format: filePath:symbolName)
+  const colonIndex = symbolId.lastIndexOf(':')
+  if (colonIndex === -1) return undefined
+  const filePath = symbolId.substring(0, colonIndex)
+
+  // Check modules in order of specificity
+  for (const module of modules) {
+    const mappings = module.mappings
+    if (!mappings) continue
+
+    // Check symbol-level first (highest priority)
+    if (mappings.symbols?.includes(symbolId)) {
+      return module.id
+    }
+
+    // Check file-level
+    if (mappings.files?.includes(filePath)) {
+      return module.id
+    }
+
+    // Check directory-level
+    if (mappings.directories) {
+      for (const pattern of mappings.directories) {
+        // Convert glob pattern to regex
+        const regexPattern = pattern
+          .replace(/\*\*/g, '<<GLOBSTAR>>')
+          .replace(/\*/g, '[^/]*')
+          .replace(/\?/g, '.')
+          .replace(/<<GLOBSTAR>>/g, '.*')
+
+        const regex = new RegExp(`^${regexPattern}$`)
+        if (regex.test(filePath)) {
+          return module.id
+        }
+      }
+    }
+  }
+
+  return undefined
+}
+
+function runStep4(
+  modules: ModuleNode[],
+  callEdges: DependencyEdge[],
+  onProgress: (status: string) => void
+): Step4ModuleEdgesResult {
+  onProgress('Step 4/5: Computing module dependencies...')
+
+  const moduleEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build symbol -> module map
+  const allSymbolIds = new Set<string>()
+  for (const edge of callEdges) {
+    allSymbolIds.add(edge.source)
+    allSymbolIds.add(edge.target)
+  }
+
+  const symbolToModule = new Map<string, string | undefined>()
+  for (const symbolId of allSymbolIds) {
+    symbolToModule.set(symbolId, resolveSymbolToModule(symbolId, modules))
+  }
+
+  // Aggregate symbol edges to module edges
+  for (const edge of callEdges) {
+    const sourceModule = symbolToModule.get(edge.source)
+    const targetModule = symbolToModule.get(edge.target)
+
+    if (!sourceModule || !targetModule) continue
+    if (sourceModule === targetModule) continue // Skip internal edges
+
+    const edgeId = `${sourceModule}->${targetModule}`
+    if (seenEdges.has(edgeId)) continue
+
+    seenEdges.add(edgeId)
+    moduleEdges.push({
+      id: edgeId,
+      source: sourceModule,
+      target: targetModule,
+      type: 'depends-on'
+    })
+  }
+
+  console.log(
+    `[Step4] Computed ${moduleEdges.length} module edges from ${callEdges.length} symbol edges`
+  )
+
+  return {
+    step: 4,
+    timestamp: new Date().toISOString(),
+    edges: moduleEdges
+  }
+}
+
+function runStep5(
+  _domains: DomainNode[],
+  modules: ModuleNode[],
+  moduleEdges: SemanticEdge[],
+  onProgress: (status: string) => void
+): Step5DomainEdgesResult {
+  onProgress('Step 5/5: Computing domain dependencies...')
+
+  const domainEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build module -> domain map
+  const moduleToDomain = new Map<string, string>()
+  for (const module of modules) {
+    if (module.parentId) {
+      moduleToDomain.set(module.id, module.parentId)
+    }
+  }
+
+  // Aggregate module edges to domain edges
+  for (const moduleEdge of moduleEdges) {
+    const sourceDomain = moduleToDomain.get(moduleEdge.source)
+    const targetDomain = moduleToDomain.get(moduleEdge.target)
+
+    if (!sourceDomain || !targetDomain) continue
+    if (sourceDomain === targetDomain) continue // Skip internal edges
+
+    const edgeId = `${sourceDomain}->${targetDomain}`
+    if (seenEdges.has(edgeId)) continue
+
+    seenEdges.add(edgeId)
+    domainEdges.push({
+      id: edgeId,
+      source: sourceDomain,
+      target: targetDomain,
+      type: 'depends-on'
+    })
+  }
+
+  console.log(
+    `[Step5] Computed ${domainEdges.length} domain edges from ${moduleEdges.length} module edges`
+  )
+
+  return {
+    step: 5,
+    timestamp: new Date().toISOString(),
+    edges: domainEdges
+  }
+}
+
+function computeSystemEdges(domains: DomainNode[], domainEdges: SemanticEdge[]): SemanticEdge[] {
+  const systemEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build domain -> system map
+  const domainToSystem = new Map<string, string>()
+  for (const domain of domains) {
+    if (domain.parentId) {
+      domainToSystem.set(domain.id, domain.parentId)
+    }
+  }
+
+  // Aggregate domain edges to system edges
+  for (const domainEdge of domainEdges) {
+    const sourceSystem = domainToSystem.get(domainEdge.source)
+    const targetSystem = domainToSystem.get(domainEdge.target)
+
+    if (!sourceSystem || !targetSystem) continue
+    if (sourceSystem === targetSystem) continue
+
+    const edgeId = `${sourceSystem}->${targetSystem}`
+    if (seenEdges.has(edgeId)) continue
+
+    seenEdges.add(edgeId)
+    systemEdges.push({
+      id: edgeId,
+      source: sourceSystem,
+      target: targetSystem,
+      type: 'depends-on'
+    })
+  }
+
+  console.log(`[SystemEdges] Computed ${systemEdges.length} system edges`)
+  return systemEdges
 }
 
 // =============================================================================
 // MAIN ANALYSIS FUNCTION
 // =============================================================================
 
-/**
- * Analyze the codebase and generate semantic nodes
- *
- * Flow:
- * 1. Check cache validity
- * 2. If valid cache exists, return cached analysis
- * 3. Otherwise, run LLM analysis with tool calling
- * 4. Parse and validate the response
- * 5. Save to cache
- * 6. Return the analysis
- */
 export async function analyzeSemantics(options: AnalyzeOptions): Promise<AnalysisResult> {
-  const { projectPath, forceRefresh = false, onProgress, onToolStart, onToolEnd } = options
+  const {
+    projectPath,
+    forceRefresh = false,
+    onProgress = () => {},
+    onToolStart = () => {},
+    onToolEnd = () => {}
+  } = options
 
-  console.log('[SemanticAnalyzer] Starting analysis for:', projectPath)
+  console.log('[SemanticAnalyzer] Starting 5-step analysis for:', projectPath)
 
-  // Check cache unless force refresh
-  if (!forceRefresh) {
-    onProgress?.('Checking cache...')
-    const cachedAnalysis = await loadSemanticAnalysis(projectPath)
-
-    if (cachedAnalysis) {
-      console.log('[SemanticAnalyzer] Using cached analysis from:', cachedAnalysis.timestamp)
-      onProgress?.('Using cached analysis')
-      return {
-        success: true,
-        analysis: cachedAnalysis,
-        cached: true
-      }
-    }
+  // Handle force refresh
+  if (forceRefresh) {
+    console.log('[SemanticAnalyzer] Force refresh - invalidating all caches')
+    await invalidateStepCaches(projectPath)
   }
 
-  onProgress?.('Starting LLM analysis...')
-  console.log('[SemanticAnalyzer] Running fresh LLM analysis')
-
-  // Prepare the initial message to start the analysis
-  const initialMessage = `Please analyze this codebase and identify its semantic structure.
-
-Start by exploring the file structure to understand the project layout, then identify:
-1. System-level components (major architectural parts)
-2. Domain-level groupings (business capabilities)
-3. Module-level groupings (related code units)
-
-Begin your exploration now.`
-
-  let fullResponse = ''
-
   try {
-    // Use the existing agentic loop with tool calling
-    await new Promise<void>((resolve, reject) => {
-      sendMessageWithTools(
-        {
-          messages: [{ role: 'user', content: initialMessage }],
-          systemPrompt: SEMANTIC_ANALYSIS_SYSTEM_PROMPT,
+    // Check if we have a complete cached analysis
+    if (!forceRefresh && (await isStepAnalysisComplete(projectPath))) {
+      console.log('[SemanticAnalyzer] Using complete cached analysis')
+      onProgress('Loading cached analysis...')
+
+      const step1 = await loadStepCache(projectPath, 1)
+      const step2 = await loadStepCache(projectPath, 2)
+      const step3 = await loadStepCache(projectPath, 3)
+      const step4 = await loadStepCache(projectPath, 4)
+      const step5 = await loadStepCache(projectPath, 5)
+
+      if (step1 && step2 && step3 && step4 && step5) {
+        const systems = (step1.data as Step1SystemsResult).systems
+        const modules = (step3.data as Step3DomainsResult & { updatedModules: ModuleNode[] })
+          .updatedModules
+        const domains = (step3.data as Step3DomainsResult).domains
+        const moduleEdges = (step4.data as Step4ModuleEdgesResult).edges
+        const domainEdges = (step5.data as Step5DomainEdgesResult).edges
+        const systemEdges = computeSystemEdges(domains, domainEdges)
+
+        const analysis: SemanticAnalysis = {
           projectPath,
-          maxTokens: 8192, // Larger for JSON output
-          finalResponseOnly: true // Only capture the final JSON response, not intermediate tool-calling text
-        },
-        // onChunk - don't accumulate here, we'll get filtered response from onComplete
-        () => {
-          // Intentionally empty - we use onComplete to get the filtered final response
-        },
-        // onError
-        (error) => {
-          reject(error)
-        },
-        // onComplete - receive the filtered final response (only last iteration when finalResponseOnly=true)
-        (response) => {
-          fullResponse = response
-          resolve()
-        },
-        // onToolStart
-        (toolName, description) => {
-          console.log(`[SemanticAnalyzer] Tool: ${toolName} - ${description}`)
-          onProgress?.(`Exploring: ${description}`)
-          onToolStart?.(toolName, description)
-        },
-        // onToolEnd
-        (toolName, result) => {
-          onToolEnd?.(toolName, result)
+          timestamp: new Date().toISOString(),
+          version: '2.0.0',
+          systems,
+          domains,
+          modules,
+          edges: [...moduleEdges, ...domainEdges, ...systemEdges]
         }
+
+        const completedSteps = await getCompletedSteps(projectPath)
+        return {
+          success: true,
+          analysis,
+          cached: true,
+          completedSteps
+        }
+      }
+    }
+
+    // Execute steps 1-3 (LLM steps)
+    let step1Result: Step1SystemsResult
+    let step2Result: Step2ModulesResult
+    let step3Result: { domains: DomainNode[]; updatedModules: ModuleNode[] }
+
+    // Step 1: Identify systems
+    if (await isStepCacheValid(projectPath, 1)) {
+      onProgress('Loading cached systems...')
+      const cached = await loadStepCache(projectPath, 1)
+      if (cached) {
+        step1Result = cached.data as Step1SystemsResult
+        console.log('[SemanticAnalyzer] Loaded cached step 1')
+      } else {
+        step1Result = await runStep1(projectPath, onProgress, onToolStart, onToolEnd)
+        await saveStepCache(projectPath, 1, step1Result)
+      }
+    } else {
+      step1Result = await runStep1(projectPath, onProgress, onToolStart, onToolEnd)
+      await saveStepCache(projectPath, 1, step1Result)
+    }
+
+    // Step 2: Identify modules
+    if (await isStepCacheValid(projectPath, 2)) {
+      onProgress('Loading cached modules...')
+      const cached = await loadStepCache(projectPath, 2)
+      if (cached) {
+        step2Result = cached.data as Step2ModulesResult
+        console.log('[SemanticAnalyzer] Loaded cached step 2')
+      } else {
+        step2Result = await runStep2(projectPath, step1Result, onProgress, onToolStart, onToolEnd)
+        await saveStepCache(projectPath, 2, step2Result)
+      }
+    } else {
+      step2Result = await runStep2(projectPath, step1Result, onProgress, onToolStart, onToolEnd)
+      await saveStepCache(projectPath, 2, step2Result)
+    }
+
+    // Step 3: Infer domains
+    if (await isStepCacheValid(projectPath, 3)) {
+      onProgress('Loading cached domains...')
+      const cached = await loadStepCache(projectPath, 3)
+      if (cached) {
+        const step3Data = cached.data as Step3DomainsResult & { updatedModules: ModuleNode[] }
+        step3Result = { domains: step3Data.domains, updatedModules: step3Data.updatedModules }
+        console.log('[SemanticAnalyzer] Loaded cached step 3')
+      } else {
+        step3Result = await runStep3(
+          projectPath,
+          step1Result,
+          step2Result,
+          onProgress,
+          onToolStart,
+          onToolEnd
+        )
+        await saveStepCache(projectPath, 3, {
+          step: 3,
+          timestamp: new Date().toISOString(),
+          domains: step3Result.domains,
+          updatedModules: step3Result.updatedModules
+        } as Step3DomainsResult & { updatedModules: ModuleNode[] })
+      }
+    } else {
+      step3Result = await runStep3(
+        projectPath,
+        step1Result,
+        step2Result,
+        onProgress,
+        onToolStart,
+        onToolEnd
       )
-    })
+      await saveStepCache(projectPath, 3, {
+        step: 3,
+        timestamp: new Date().toISOString(),
+        domains: step3Result.domains,
+        updatedModules: step3Result.updatedModules
+      } as Step3DomainsResult & { updatedModules: ModuleNode[] })
+    }
 
-    console.log('[SemanticAnalyzer] LLM response length:', fullResponse.length)
+    // We need symbol dependencies for step 4 - this should come from the symbol extractor
+    // For now, we'll error out if we don't have the symbol data
+    // The caller should ensure symbols are extracted before calling analyzeSemantics
+    onProgress('Waiting for symbol extraction...')
 
-    // Parse the response
-    onProgress?.('Parsing analysis results...')
-    const analysis = parseAnalysisResponse(fullResponse, projectPath)
-
-    console.log('[SemanticAnalyzer] Analysis complete:', {
-      systems: analysis.systems.length,
-      domains: analysis.domains.length,
-      modules: analysis.modules.length,
-      edges: analysis.edges.length
-    })
-
-    // Save to cache
-    onProgress?.('Saving to cache...')
-    await saveSemanticAnalysis(projectPath, analysis)
-
-    onProgress?.('Analysis complete')
+    // We'll need to be called with the project symbols later
+    // For now, return partial result indicating we need symbols
     return {
-      success: true,
-      analysis,
-      cached: false
+      success: false,
+      error:
+        'Symbol extraction required before completing steps 4-5. Please extract symbols first.',
+      completedSteps: [1, 2, 3]
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('[SemanticAnalyzer] Analysis failed:', errorMessage)
+
+    return {
+      success: false,
+      error: errorMessage,
+      completedSteps: await getCompletedSteps(projectPath)
+    }
+  }
+}
+
+/**
+ * Complete the analysis with symbol dependencies (steps 4-5)
+ * This should be called after symbol extraction is complete
+ */
+export async function completeAnalysisWithSymbols(
+  projectPath: string,
+  projectSymbols: ProjectSymbols,
+  onProgress: (status: string) => void = () => {}
+): Promise<AnalysisResult> {
+  console.log('[SemanticAnalyzer] Completing analysis with symbol data')
+
+  try {
+    // Load cached steps 1-3
+    const step1Cache = await loadStepCache(projectPath, 1)
+    const step2Cache = await loadStepCache(projectPath, 2)
+    const step3Cache = await loadStepCache(projectPath, 3)
+
+    if (!step1Cache || !step2Cache || !step3Cache) {
+      return {
+        success: false,
+        error: 'Missing cached steps 1-3. Please run analyzeSemantics first.'
+      }
+    }
+
+    const systems = (step1Cache.data as Step1SystemsResult).systems
+    const modules = (step3Cache.data as Step3DomainsResult & { updatedModules: ModuleNode[] })
+      .updatedModules
+    const domains = (step3Cache.data as Step3DomainsResult).domains
+
+    // Step 4: Compute module dependencies
+    let step4Result: Step4ModuleEdgesResult
+    if (await isStepCacheValid(projectPath, 4)) {
+      onProgress('Loading cached module dependencies...')
+      const cached = await loadStepCache(projectPath, 4)
+      if (cached) {
+        step4Result = cached.data as Step4ModuleEdgesResult
+      } else {
+        step4Result = runStep4(modules, projectSymbols.callEdges, onProgress)
+        await saveStepCache(projectPath, 4, step4Result)
+      }
+    } else {
+      step4Result = runStep4(modules, projectSymbols.callEdges, onProgress)
+      await saveStepCache(projectPath, 4, step4Result)
+    }
+
+    // Step 5: Compute domain dependencies
+    let step5Result: Step5DomainEdgesResult
+    if (await isStepCacheValid(projectPath, 5)) {
+      onProgress('Loading cached domain dependencies...')
+      const cached = await loadStepCache(projectPath, 5)
+      if (cached) {
+        step5Result = cached.data as Step5DomainEdgesResult
+      } else {
+        step5Result = runStep5(domains, modules, step4Result.edges, onProgress)
+        await saveStepCache(projectPath, 5, step5Result)
+      }
+    } else {
+      step5Result = runStep5(domains, modules, step4Result.edges, onProgress)
+      await saveStepCache(projectPath, 5, step5Result)
+    }
+
+    // Compute system edges
+    const systemEdges = computeSystemEdges(domains, step5Result.edges)
+
+    // Build final analysis
+    const analysis: SemanticAnalysis = {
+      projectPath,
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      systems,
+      domains,
+      modules,
+      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges]
+    }
+
+    onProgress('Analysis complete')
+
+    return {
+      success: true,
+      analysis,
+      cached: false,
+      completedSteps: [1, 2, 3, 4, 5]
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[SemanticAnalyzer] Failed to complete analysis:', errorMessage)
 
     return {
       success: false,
@@ -409,15 +987,91 @@ Begin your exploration now.`
 }
 
 /**
- * Quick check if semantic analysis exists and is valid
- */
-export async function hasValidAnalysis(projectPath: string): Promise<boolean> {
-  return await isCacheValid(projectPath)
-}
-
-/**
  * Get cached analysis without running LLM (fast)
  */
 export async function getCachedAnalysis(projectPath: string): Promise<SemanticAnalysis | null> {
-  return await loadSemanticAnalysis(projectPath)
+  if (!(await isStepAnalysisComplete(projectPath))) {
+    return null
+  }
+
+  try {
+    const step1 = await loadStepCache(projectPath, 1)
+    const step2 = await loadStepCache(projectPath, 2)
+    const step3 = await loadStepCache(projectPath, 3)
+    const step4 = await loadStepCache(projectPath, 4)
+    const step5 = await loadStepCache(projectPath, 5)
+
+    if (!step1 || !step2 || !step3 || !step4 || !step5) {
+      return null
+    }
+
+    const systems = (step1.data as Step1SystemsResult).systems
+    const modules = (step3.data as Step3DomainsResult & { updatedModules: ModuleNode[] })
+      .updatedModules
+    const domains = (step3.data as Step3DomainsResult).domains
+    const moduleEdges = (step4.data as Step4ModuleEdgesResult).edges
+    const domainEdges = (step5.data as Step5DomainEdgesResult).edges
+    const systemEdges = computeSystemEdges(domains, domainEdges)
+
+    return {
+      projectPath,
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      systems,
+      domains,
+      modules,
+      edges: [...moduleEdges, ...domainEdges, ...systemEdges]
+    }
+  } catch (error) {
+    console.error('[SemanticAnalyzer] Error loading cached analysis:', error)
+    return null
+  }
+}
+
+/**
+ * Check if valid semantic analysis cache exists
+ */
+export async function hasValidAnalysis(projectPath: string): Promise<boolean> {
+  return await isStepAnalysisComplete(projectPath)
+}
+
+/**
+ * Get cache info for debugging/UI
+ */
+export async function getCacheInfo(projectPath: string): Promise<{
+  exists: boolean
+  valid: boolean
+  lastUpdated: string | null
+  fileCount: number
+  completedSteps: AnalysisStep[]
+}> {
+  const manifest = await getStepCacheManifest(projectPath)
+  const exists = manifest !== null
+
+  if (!manifest) {
+    return {
+      exists: false,
+      valid: false,
+      lastUpdated: null,
+      fileCount: 0,
+      completedSteps: []
+    }
+  }
+
+  const valid = await isStepAnalysisComplete(projectPath)
+
+  return {
+    exists,
+    valid,
+    lastUpdated: manifest.lastUpdated,
+    fileCount: manifest.fileCount,
+    completedSteps: manifest.completedSteps
+  }
+}
+
+/**
+ * Invalidate (delete) the cache
+ */
+export async function invalidateCache(projectPath: string): Promise<void> {
+  await invalidateStepCaches(projectPath)
 }

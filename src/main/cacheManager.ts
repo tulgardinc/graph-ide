@@ -9,7 +9,18 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as crypto from 'crypto'
 import { walkDirectory } from './fileWalker'
-import type { SemanticAnalysis, CacheManifest } from './types'
+import type {
+  SemanticAnalysis,
+  CacheManifest,
+  AnalysisStep,
+  StepCacheEntry,
+  StepAnalysisCacheManifest,
+  Step1SystemsResult,
+  Step2ModulesResult,
+  Step3DomainsResult,
+  Step4ModuleEdgesResult,
+  Step5DomainEdgesResult
+} from './types'
 
 // =============================================================================
 // CONSTANTS
@@ -370,4 +381,266 @@ export async function getCacheInfo(projectPath: string): Promise<{
     lastUpdated: manifest.lastUpdated,
     fileCount: manifest.fileCount
   }
+}
+
+// =============================================================================
+// 5-STEP ANALYSIS PER-STEP CACHING
+// =============================================================================
+
+const STEP_MANIFEST_FILE = 'step-manifest.json'
+
+/**
+ * Get the path to the step manifest file
+ */
+function getStepManifestPath(projectPath: string): string {
+  return path.join(getCacheDir(projectPath), STEP_MANIFEST_FILE)
+}
+
+/**
+ * Get the path to a specific step cache file
+ */
+function getStepCachePath(projectPath: string, step: AnalysisStep): string {
+  return path.join(getCacheDir(projectPath), `step-${step}-cache.json`)
+}
+
+/**
+ * Get the step analysis cache manifest
+ */
+export async function getStepCacheManifest(
+  projectPath: string
+): Promise<StepAnalysisCacheManifest | null> {
+  const manifestPath = getStepManifestPath(projectPath)
+
+  if (!fs.existsSync(manifestPath)) {
+    return null
+  }
+
+  try {
+    const content = fs.readFileSync(manifestPath, 'utf-8')
+    return JSON.parse(content) as StepAnalysisCacheManifest
+  } catch (error) {
+    console.error('[CacheManager] Error reading step manifest:', error)
+    return null
+  }
+}
+
+/**
+ * Save the step analysis cache manifest
+ */
+async function saveStepManifest(
+  projectPath: string,
+  manifest: StepAnalysisCacheManifest
+): Promise<void> {
+  await initializeCache(projectPath)
+  const manifestPath = getStepManifestPath(projectPath)
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
+}
+
+/**
+ * Initialize a new step cache manifest
+ */
+async function initializeStepManifest(projectPath: string): Promise<StepAnalysisCacheManifest> {
+  const files = walkDirectory(projectPath, {
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    excludeDirs: [
+      'node_modules',
+      '.git',
+      'dist',
+      'out',
+      'build',
+      '.next',
+      'coverage',
+      CACHE_DIR_NAME
+    ]
+  })
+
+  const fileHashes = files.map((file) => ({
+    path: path.relative(projectPath, file),
+    hash: computeFileHash(file)
+  }))
+
+  const projectHash = await computeProjectHash(projectPath)
+
+  const manifest: StepAnalysisCacheManifest = {
+    version: CACHE_VERSION,
+    lastUpdated: new Date().toISOString(),
+    projectHash,
+    fileCount: files.length,
+    files: fileHashes,
+    completedSteps: [],
+    stepDependencies: {
+      1: null,
+      2: [1],
+      3: [1, 2],
+      4: [2],
+      5: [3, 4]
+    }
+  }
+
+  await saveStepManifest(projectPath, manifest)
+  return manifest
+}
+
+/**
+ * Check if a specific step's cache is valid
+ * Returns true if:
+ * 1. The step manifest exists and is valid
+ * 2. The step is marked as completed
+ * 3. All dependent steps are also cached
+ */
+export async function isStepCacheValid(projectPath: string, step: AnalysisStep): Promise<boolean> {
+  const manifest = await getStepCacheManifest(projectPath)
+
+  if (!manifest) {
+    return false
+  }
+
+  // Check if project hash matches
+  const currentHash = await computeProjectHash(projectPath)
+  if (currentHash !== manifest.projectHash) {
+    console.log(`[CacheManager] Step ${step}: Project hash mismatch`)
+    return false
+  }
+
+  // Check if step is marked as completed
+  if (!manifest.completedSteps.includes(step)) {
+    return false
+  }
+
+  // Check if step cache file exists
+  const stepPath = getStepCachePath(projectPath, step)
+  if (!fs.existsSync(stepPath)) {
+    return false
+  }
+
+  // Check if all dependencies are met
+  const dependencies = manifest.stepDependencies[step]
+  if (dependencies) {
+    for (const depStep of dependencies) {
+      if (!manifest.completedSteps.includes(depStep)) {
+        console.log(`[CacheManager] Step ${step}: Missing dependency step ${depStep}`)
+        return false
+      }
+    }
+  }
+
+  console.log(`[CacheManager] Step ${step}: Cache is valid`)
+  return true
+}
+
+/**
+ * Get completed steps from cache
+ */
+export async function getCompletedSteps(projectPath: string): Promise<AnalysisStep[]> {
+  const manifest = await getStepCacheManifest(projectPath)
+  return manifest?.completedSteps ?? []
+}
+
+/**
+ * Load a specific step's cached result
+ */
+export async function loadStepCache(
+  projectPath: string,
+  step: AnalysisStep
+): Promise<StepCacheEntry | null> {
+  if (!(await isStepCacheValid(projectPath, step))) {
+    return null
+  }
+
+  const stepPath = getStepCachePath(projectPath, step)
+
+  try {
+    const content = fs.readFileSync(stepPath, 'utf-8')
+    const entry = JSON.parse(content) as StepCacheEntry
+    console.log(`[CacheManager] Loaded step ${step} cache from`, entry.timestamp)
+    return entry
+  } catch (error) {
+    console.error(`[CacheManager] Error reading step ${step} cache:`, error)
+    return null
+  }
+}
+
+/**
+ * Save a step's result to cache
+ */
+export async function saveStepCache(
+  projectPath: string,
+  step: AnalysisStep,
+  data:
+    | Step1SystemsResult
+    | Step2ModulesResult
+    | Step3DomainsResult
+    | Step4ModuleEdgesResult
+    | Step5DomainEdgesResult
+): Promise<void> {
+  await initializeCache(projectPath)
+
+  // Get or create manifest
+  let manifest = await getStepCacheManifest(projectPath)
+  if (!manifest) {
+    manifest = await initializeStepManifest(projectPath)
+  }
+
+  // Create cache entry
+  const entry: StepCacheEntry = {
+    step,
+    timestamp: new Date().toISOString(),
+    completed: true,
+    projectHash: manifest.projectHash,
+    data
+  }
+
+  // Save step cache file
+  const stepPath = getStepCachePath(projectPath, step)
+  fs.writeFileSync(stepPath, JSON.stringify(entry, null, 2), 'utf-8')
+  console.log(`[CacheManager] Saved step ${step} cache`)
+
+  // Update manifest with completed step
+  if (!manifest.completedSteps.includes(step)) {
+    manifest.completedSteps.push(step)
+    manifest.completedSteps.sort((a, b) => a - b)
+    manifest.lastUpdated = new Date().toISOString()
+    await saveStepManifest(projectPath, manifest)
+  }
+}
+
+/**
+ * Invalidate all step caches (force full re-analysis)
+ */
+export async function invalidateStepCaches(projectPath: string): Promise<void> {
+  const cacheDir = getCacheDir(projectPath)
+
+  if (!fs.existsSync(cacheDir)) {
+    return
+  }
+
+  // Delete step manifest
+  const manifestPath = getStepManifestPath(projectPath)
+  if (fs.existsSync(manifestPath)) {
+    fs.unlinkSync(manifestPath)
+  }
+
+  // Delete all step cache files
+  for (let step = 1; step <= 5; step++) {
+    const stepPath = getStepCachePath(projectPath, step as AnalysisStep)
+    if (fs.existsSync(stepPath)) {
+      fs.unlinkSync(stepPath)
+    }
+  }
+
+  console.log('[CacheManager] Step caches invalidated')
+}
+
+/**
+ * Check if step analysis is complete (all 5 steps cached)
+ */
+export async function isStepAnalysisComplete(projectPath: string): Promise<boolean> {
+  const manifest = await getStepCacheManifest(projectPath)
+
+  if (!manifest) {
+    return false
+  }
+
+  // Check if all 5 steps are completed
+  return manifest.completedSteps.length === 5
 }

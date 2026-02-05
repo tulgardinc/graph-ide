@@ -199,8 +199,18 @@ const api = {
     valid: boolean
     lastUpdated: string | null
     fileCount: number
+    completedSteps: number[]
   }> => {
     return ipcRenderer.invoke('semantic:cacheInfo')
+  },
+
+  /**
+   * Complete semantic analysis with symbol data (steps 4-5)
+   * Called after symbol extraction to compute dependencies
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  semanticCompleteWithSymbols: (symbolData: any): Promise<any> => {
+    return ipcRenderer.invoke('semantic:completeWithSymbols', symbolData)
   },
 
   /**

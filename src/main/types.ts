@@ -94,12 +94,13 @@ export interface SystemNode extends SemanticNode {
 
 /**
  * Edge between semantic nodes
+ * Note: 'contains' is eliminated - use parentId/children hierarchy instead
  */
 export interface SemanticEdge {
   id: string
   source: string // SemanticNode ID
   target: string // SemanticNode ID
-  type: 'contains' | 'depends-on' | 'communicates-with'
+  type: 'depends-on' | 'communicates-with'
 }
 
 /**
@@ -292,4 +293,105 @@ export const DEFAULT_EXTRACTOR_OPTIONS: Required<ExtractorOptions> = {
   extensions: ['.ts', '.tsx'],
   excludeDirs: ['node_modules', '.git', 'dist', 'out', 'build', '.next', 'coverage'],
   maxDepth: Infinity
+}
+
+// =============================================================================
+// 5-STEP SEMANTIC ANALYSIS TYPES
+// =============================================================================
+
+/**
+ * Analysis steps for the 5-step pipeline
+ * Steps 1-3 use LLM, Steps 4-5 are algorithmic
+ */
+export type AnalysisStep = 1 | 2 | 3 | 4 | 5
+
+/**
+ * Step 1 Result: System identification
+ */
+export interface Step1SystemsResult {
+  step: 1
+  timestamp: string
+  systems: SystemNode[]
+}
+
+/**
+ * Step 2 Result: Module identification with code mappings
+ */
+export interface Step2ModulesResult {
+  step: 2
+  timestamp: string
+  modules: ModuleNode[]
+}
+
+/**
+ * Step 3 Result: Domain inference from systems + modules
+ */
+export interface Step3DomainsResult {
+  step: 3
+  timestamp: string
+  domains: DomainNode[]
+}
+
+/**
+ * Step 4 Result: Module dependencies from symbol call edges (algorithmic)
+ */
+export interface Step4ModuleEdgesResult {
+  step: 4
+  timestamp: string
+  edges: SemanticEdge[] // module -> module, type: "depends-on"
+}
+
+/**
+ * Step 5 Result: Domain dependencies from module edges (algorithmic)
+ */
+export interface Step5DomainEdgesResult {
+  step: 5
+  timestamp: string
+  edges: SemanticEdge[] // domain -> domain, type: "depends-on"
+}
+
+/**
+ * Combined edges from all dependency inference steps (4-5 + system edges)
+ */
+export interface AlgorithmicEdges {
+  moduleEdges: SemanticEdge[] // From step 4
+  domainEdges: SemanticEdge[] // From step 5
+  systemEdges: SemanticEdge[] // Computed from domain edges (step 5 extension)
+}
+
+/**
+ * Per-step cache entry for resumable analysis
+ */
+export interface StepCacheEntry {
+  step: AnalysisStep
+  timestamp: string
+  completed: boolean
+  projectHash: string
+  data:
+    | Step1SystemsResult
+    | Step2ModulesResult
+    | Step3DomainsResult
+    | Step4ModuleEdgesResult
+    | Step5DomainEdgesResult
+}
+
+/**
+ * Extended cache manifest for 5-step analysis
+ */
+export interface StepAnalysisCacheManifest {
+  version: string
+  lastUpdated: string
+  projectHash: string
+  fileCount: number
+  files: Array<{ path: string; hash: string }>
+  /** Which steps have been completed */
+  completedSteps: AnalysisStep[]
+  /** Step dependency tracking */
+  stepDependencies: {
+    1: null // Step 1 has no dependencies
+    2: [1] // Step 2 depends on Step 1
+    3: [1, 2] // Step 3 depends on Steps 1 & 2
+    4: [2] // Step 4 depends on Step 2 (modules) + symbol extraction
+    5: [3, 4] // Step 5 depends on Steps 3 (domains) & 4 (module edges)
+  }
 }

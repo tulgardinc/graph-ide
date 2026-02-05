@@ -36,6 +36,7 @@ export interface SemanticAnalysisResult {
   analysis?: SemanticAnalysis
   error?: string
   cached?: boolean
+  completedSteps?: number[]
 }
 
 /**
@@ -46,6 +47,7 @@ export interface SemanticCacheInfo {
   valid: boolean
   lastUpdated: string | null
   fileCount: number
+  completedSteps: number[]
 }
 
 /**
@@ -190,6 +192,12 @@ interface MapIdeAPI {
    * Get cache info for debugging/UI
    */
   semanticCacheInfo: () => Promise<SemanticCacheInfo>
+
+  /**
+   * Complete semantic analysis with symbol data (steps 4-5)
+   * Called after symbol extraction to compute dependencies
+   */
+  semanticCompleteWithSymbols: (symbolData: ProjectSymbols) => Promise<SemanticAnalysisResult>
 
   /**
    * Subscribe to semantic analysis progress events

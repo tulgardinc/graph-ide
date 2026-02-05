@@ -242,15 +242,33 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       console.log('[GraphStore] Loading semantic analysis...')
       const result = await window.api.semanticAnalyze(forceRefresh)
 
-      if (!result.success || !result.analysis) {
+      // Check if we have partial results (steps 1-3 completed but waiting for symbols)
+      const hasPartialResults =
+        !result.success && result.completedSteps && result.completedSteps.length >= 3
+
+      if (!result.success && !hasPartialResults) {
         throw new Error(result.error || 'Analysis failed')
       }
 
-      const analysis = result.analysis
+      // If we have partial results but no full analysis, we need to load from cache
+      let analysis: SemanticAnalysis
+      if (!result.analysis) {
+        console.log('[GraphStore] Loading partial analysis from cache (steps 1-3 complete)')
+        const cached = await window.api.semanticGetCached()
+        if (!cached) {
+          throw new Error('Partial results not available in cache')
+        }
+        analysis = cached
+      } else {
+        analysis = result.analysis
+      }
+
       console.log('[GraphStore] Semantic analysis loaded:', {
         systems: analysis.systems.length,
         domains: analysis.domains.length,
-        modules: analysis.modules.length
+        modules: analysis.modules.length,
+        edges: analysis.edges?.length || 0,
+        partial: hasPartialResults
       })
 
       // Build color map for unique colors with parent-child border inheritance
@@ -271,12 +289,12 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         return createSemanticNode(m.id, m.name, 'module', colors, m.summary)
       })
 
-      // Create edges from semantic edges
+      // Create edges from semantic edges (may be empty for partial results)
       const semanticEdges = (analysis.edges || []).map((edge) => ({
         id: edge.id,
         source: edge.source,
         target: edge.target,
-        type: 'default',
+        type: 'default' as const,
         animated: edge.type === 'communicates-with',
         style: {
           stroke: edge.type === 'depends-on' ? '#3b82f6' : '#10b981',
@@ -475,18 +493,173 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         )
       }
 
-      set({
-        projectSymbols: result,
-        symbolsLoading: false,
-        nodesByLevel: { ...currentState.nodesByLevel, symbol: layoutedSymbolNodes },
-        edgesByLevel: { ...currentState.edgesByLevel, symbol: symbolEdgesList },
-        layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol']),
-        // Clear the pending module selection after processing
-        pendingModuleSelectionForSymbols: null,
-        // If we have symbols to select, store them as pending for GraphPanel to consume
-        // GraphPanel will apply selection through React Flow (source of truth for selection)
-        pendingSymbolIdsToSelect: symbolIdsToSelect
-      })
+      // Complete semantic analysis with symbol data (steps 4-5)
+      // This computes module and domain dependencies from symbol call edges
+      let updatedAnalysis = semanticAnalysis
+      try {
+        console.log('[GraphStore] Completing semantic analysis with symbol data...')
+        const completeResult = await window.api.semanticCompleteWithSymbols(result)
+        if (completeResult.success && completeResult.analysis) {
+          updatedAnalysis = completeResult.analysis
+          console.log('[GraphStore] Semantic analysis completed with dependencies:', {
+            systems: updatedAnalysis.systems.length,
+            domains: updatedAnalysis.domains.length,
+            modules: updatedAnalysis.modules.length,
+            edges: updatedAnalysis.edges.length
+          })
+
+          // Rebuild semantic nodes and edges with the completed analysis
+          const newColorMap = buildColorMap(
+            updatedAnalysis.systems,
+            updatedAnalysis.domains,
+            updatedAnalysis.modules
+          )
+
+          // Create new semantic nodes
+          const systemNodes = updatedAnalysis.systems.map((s) => {
+            const colors = newColorMap.get(s.id)!
+            return createSemanticNode(s.id, s.name, 'system', colors, s.summary)
+          })
+          const domainNodes = updatedAnalysis.domains.map((d) => {
+            const colors = newColorMap.get(d.id)!
+            return createSemanticNode(d.id, d.name, 'domain', colors, d.summary)
+          })
+          const moduleNodes = updatedAnalysis.modules.map((m) => {
+            const colors = newColorMap.get(m.id)!
+            return createSemanticNode(m.id, m.name, 'module', colors, m.summary)
+          })
+
+          // Create edges from semantic edges
+          const semanticEdges = (updatedAnalysis.edges || []).map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            type: 'default' as const,
+            animated: edge.type === 'communicates-with',
+            style: {
+              stroke: edge.type === 'depends-on' ? '#3b82f6' : '#10b981',
+              strokeWidth: 1.5,
+              strokeDasharray: edge.type === 'communicates-with' ? '6,3' : undefined
+            },
+            markerEnd: {
+              type: 'arrowclosed' as const,
+              color: edge.type === 'depends-on' ? '#3b82f6' : '#10b981',
+              width: 12,
+              height: 12
+            }
+          }))
+
+          // Filter edges by layer
+          const systemEdges = semanticEdges.filter(
+            (e) => e.source.startsWith('system:') || e.target.startsWith('system:')
+          )
+          const domainEdges = semanticEdges.filter(
+            (e) => e.source.startsWith('domain:') || e.target.startsWith('domain:')
+          )
+          const moduleEdges = semanticEdges.filter(
+            (e) => e.source.startsWith('module:') || e.target.startsWith('module:')
+          )
+
+          // Layout nodes with edges
+          let layoutedSystemNodes = systemNodes
+          let layoutedDomainNodes = domainNodes
+          let layoutedModuleNodes = moduleNodes
+
+          if (systemNodes.length > 0) {
+            try {
+              const { nodes } = await getLayoutedElements(
+                systemNodes,
+                systemEdges,
+                LAYOUT_OPTIONS.system
+              )
+              layoutedSystemNodes = nodes
+            } catch (e) {
+              console.error('[GraphStore] System layout failed:', e)
+            }
+          }
+
+          if (domainNodes.length > 0) {
+            try {
+              const { nodes } = await getLayoutedElements(
+                domainNodes,
+                domainEdges,
+                LAYOUT_OPTIONS.domain
+              )
+              layoutedDomainNodes = nodes
+            } catch (e) {
+              console.error('[GraphStore] Domain layout failed:', e)
+            }
+          }
+
+          if (moduleNodes.length > 0) {
+            try {
+              const { nodes } = await getLayoutedElements(
+                moduleNodes,
+                moduleEdges,
+                LAYOUT_OPTIONS.module
+              )
+              layoutedModuleNodes = nodes
+            } catch (e) {
+              console.error('[GraphStore] Module layout failed:', e)
+            }
+          }
+
+          // Update state with completed analysis
+          set({
+            semanticAnalysis: updatedAnalysis,
+            colorMap: newColorMap,
+            nodesByLevel: {
+              ...currentState.nodesByLevel,
+              system: layoutedSystemNodes,
+              domain: layoutedDomainNodes,
+              module: layoutedModuleNodes,
+              symbol: layoutedSymbolNodes
+            },
+            edgesByLevel: {
+              ...currentState.edgesByLevel,
+              system: systemEdges,
+              domain: domainEdges,
+              module: moduleEdges,
+              symbol: symbolEdgesList
+            },
+            layoutedLevels: new Set([
+              ...currentState.layoutedLevels,
+              'system',
+              'domain',
+              'module',
+              'symbol'
+            ]),
+            projectSymbols: result,
+            symbolsLoading: false,
+            pendingModuleSelectionForSymbols: null,
+            pendingSymbolIdsToSelect: symbolIdsToSelect
+          })
+        } else {
+          // Complete analysis failed, but we still have symbols
+          console.warn('[GraphStore] Failed to complete semantic analysis:', completeResult.error)
+          set({
+            projectSymbols: result,
+            symbolsLoading: false,
+            nodesByLevel: { ...currentState.nodesByLevel, symbol: layoutedSymbolNodes },
+            edgesByLevel: { ...currentState.edgesByLevel, symbol: symbolEdgesList },
+            layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol']),
+            pendingModuleSelectionForSymbols: null,
+            pendingSymbolIdsToSelect: symbolIdsToSelect
+          })
+        }
+      } catch (completeError) {
+        console.error('[GraphStore] Error completing semantic analysis:', completeError)
+        // Still set the symbols even if completion failed
+        set({
+          projectSymbols: result,
+          symbolsLoading: false,
+          nodesByLevel: { ...currentState.nodesByLevel, symbol: layoutedSymbolNodes },
+          edgesByLevel: { ...currentState.edgesByLevel, symbol: symbolEdgesList },
+          layoutedLevels: new Set([...currentState.layoutedLevels, 'symbol']),
+          pendingModuleSelectionForSymbols: null,
+          pendingSymbolIdsToSelect: symbolIdsToSelect
+        })
+      }
     } catch (error) {
       set({
         symbolsLoading: false,

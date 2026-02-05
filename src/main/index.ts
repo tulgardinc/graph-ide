@@ -26,7 +26,12 @@ import {
   getApiKeyStatus,
   type ChatMessage
 } from './llmClient'
-import { analyzeSemantics, getCachedAnalysis, hasValidAnalysis } from './semanticAnalyzer'
+import {
+  analyzeSemantics,
+  getCachedAnalysis,
+  hasValidAnalysis,
+  completeAnalysisWithSymbols
+} from './semanticAnalyzer'
 import { invalidateCache, getCacheInfo } from './cacheManager'
 import {
   initializeGenerator,
@@ -406,6 +411,37 @@ app.whenReady().then(() => {
     }
 
     return await getCacheInfo(projectPath)
+  })
+
+  /**
+   * Complete semantic analysis with symbol data (steps 4-5)
+   * Called after symbol extraction to compute module/domain dependencies
+   */
+  ipcMain.handle('semantic:completeWithSymbols', async (event, symbolData) => {
+    const webContents = event.sender
+
+    if (!projectPath) {
+      return {
+        success: false,
+        error: 'No project path set. Cannot complete analysis.'
+      }
+    }
+
+    console.log('[Main] Completing semantic analysis with symbol data')
+
+    try {
+      const result = await completeAnalysisWithSymbols(projectPath, symbolData, (status) => {
+        webContents.send('semantic:progress', status)
+      })
+
+      return result
+    } catch (error) {
+      console.error('[Main] Failed to complete analysis:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
   })
 
   // =============================================================================

@@ -259,7 +259,7 @@ export async function sendMessageWithTools(
   let fullResponse = ''
   let currentIterationText = '' // Track text for current iteration only
   let iterationCount = 0
-  const MAX_ITERATIONS = 10 // Prevent infinite loops
+  const MAX_ITERATIONS = 30 // Prevent infinite loops, increased for semantic analysis
 
   try {
     while (iterationCount < MAX_ITERATIONS) {
@@ -379,7 +379,50 @@ export async function sendMessageWithTools(
     }
 
     if (iterationCount >= MAX_ITERATIONS) {
-      console.warn('[LLM] Max iterations reached in tool loop')
+      console.warn('[LLM] Max iterations reached in tool loop, forcing final response')
+
+      // Force the LLM to output the final JSON response
+      // Add a message instructing it to output the JSON now
+      anthropicMessages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'You have reached the tool exploration limit. Based on the information you have gathered, please now output ONLY the final JSON result. Do not use any more tools. Output ONLY valid JSON starting with { and ending with }.'
+          }
+        ]
+      })
+
+      // Make one final call without tools to get the JSON response
+      const finalStream = client.messages.stream(
+        {
+          model,
+          max_tokens: maxTokens,
+          messages: anthropicMessages,
+          // Don't include tools - force text response
+          thinking: {
+            type: 'enabled',
+            budget_tokens: 1024
+          },
+          ...(systemPrompt ? { system: systemPrompt } : {})
+        },
+        {
+          signal: localAbortController.signal
+        }
+      )
+
+      // Reset and capture the final response
+      currentIterationText = ''
+      finalStream.on('text', (text) => {
+        currentIterationText += text
+        if (!finalResponseOnly) {
+          fullResponse += text
+        }
+        onChunk(text)
+      })
+
+      await finalStream.finalMessage()
+      console.log('[LLM] Forced final response received, length:', currentIterationText.length)
     }
 
     // If finalResponseOnly mode, only return text from the last iteration (the JSON output)
