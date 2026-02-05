@@ -237,38 +237,19 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       console.log(`[GraphStore] Tool ended: ${data.toolName}`)
       set({ semanticCurrentTool: null })
     })
-
     try {
       console.log('[GraphStore] Loading semantic analysis...')
       const result = await window.api.semanticAnalyze(forceRefresh)
 
-      // Check if we have partial results (steps 1-3 completed but waiting for symbols)
-      const hasPartialResults =
-        !result.success && result.completedSteps && result.completedSteps.length >= 3
-
-      if (!result.success && !hasPartialResults) {
+      if (!result.success || !result.analysis) {
         throw new Error(result.error || 'Analysis failed')
       }
 
-      // If we have partial results but no full analysis, we need to load from cache
-      let analysis: SemanticAnalysis
-      if (!result.analysis) {
-        console.log('[GraphStore] Loading partial analysis from cache (steps 1-3 complete)')
-        const cached = await window.api.semanticGetCached()
-        if (!cached) {
-          throw new Error('Partial results not available in cache')
-        }
-        analysis = cached
-      } else {
-        analysis = result.analysis
-      }
-
+      const analysis = result.analysis
       console.log('[GraphStore] Semantic analysis loaded:', {
         systems: analysis.systems.length,
         domains: analysis.domains.length,
-        modules: analysis.modules.length,
-        edges: analysis.edges?.length || 0,
-        partial: hasPartialResults
+        modules: analysis.modules.length
       })
 
       // Build color map for unique colors with parent-child border inheritance
