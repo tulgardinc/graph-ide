@@ -227,19 +227,35 @@ function GraphCanvas(): React.JSX.Element {
     [setNodes]
   )
 
+  // Helper to clear all selection state before navigating between zoom levels
+  // This clears: React Flow selection, Zustand store, and local state
+  const clearSelection = useCallback(() => {
+    // Clear React Flow's internal selection first
+    setNodes((currentNodes) =>
+      currentNodes.map((n) => ({
+        ...n,
+        selected: false
+      }))
+    )
+    // Clear Zustand store
+    setSelectedNodeIds([])
+    // Clear local state
+    setSelectedNodes([])
+  }, [setNodes, setSelectedNodeIds])
+
   // Handle navigation from detail panel to module (zoom level change)
   const handleNavigateToModule = useCallback(
     (moduleId: string) => {
       // Close detail panel (we're leaving symbol view)
       setDetailPanelOpen(false)
-      // Clear local selection state
-      setSelectedNodes([])
+      // Clear all selection state before changing zoom level
+      clearSelection()
       // Change to module zoom level
       setZoomLevel('module')
       // Select through React Flow after nodes are rendered (source of truth for selection)
       setTimeout(() => selectNodesByIds([moduleId]), 100)
     },
-    [setZoomLevel, selectNodesByIds]
+    [setZoomLevel, selectNodesByIds, clearSelection]
   )
 
   // Handle navigation from semantic node to parent
@@ -255,14 +271,15 @@ function GraphCanvas(): React.JSX.Element {
 
       // Close detail panel temporarily
       setDetailPanelOpen(false)
-      setSelectedNodes([])
+      // Clear all selection state before changing zoom level
+      clearSelection()
 
       // Change zoom level
       setZoomLevel(targetLevel)
       // Select through React Flow after nodes are rendered (source of truth for selection)
       setTimeout(() => selectNodesByIds([parentId]), 100)
     },
-    [setZoomLevel, selectNodesByIds]
+    [setZoomLevel, selectNodesByIds, clearSelection]
   )
 
   // Handle navigation from semantic node to child
@@ -278,14 +295,15 @@ function GraphCanvas(): React.JSX.Element {
 
       // Close detail panel temporarily
       setDetailPanelOpen(false)
-      setSelectedNodes([])
+      // Clear all selection state before changing zoom level
+      clearSelection()
 
       // Change zoom level
       setZoomLevel(targetLevel)
       // Select through React Flow after nodes are rendered (source of truth for selection)
       setTimeout(() => selectNodesByIds([childId]), 100)
     },
-    [setZoomLevel, selectNodesByIds]
+    [setZoomLevel, selectNodesByIds, clearSelection]
   )
 
   // Handle double-click drill-down navigation
@@ -300,6 +318,8 @@ function GraphCanvas(): React.JSX.Element {
       const navigateAndSelect = (targetLevel: 'domain' | 'module', childIds: string[]): void => {
         // Close detail panel
         setDetailPanelOpen(false)
+        // Clear all selection state before changing zoom level
+        clearSelection()
         // Navigate to target level
         setZoomLevel(targetLevel)
         // Select children after a brief delay to ensure the new level's nodes are rendered
@@ -340,24 +360,25 @@ function GraphCanvas(): React.JSX.Element {
 
       // Symbol level: no further drill-down (already at lowest level)
     },
-    [semanticAnalysis, setZoomLevel, selectNodesByIds, openModuleSymbolView]
+    [semanticAnalysis, setZoomLevel, selectNodesByIds, openModuleSymbolView, clearSelection]
   )
 
   // Compute styled nodes with selection-based dimming (memoized to avoid infinite loops)
   // NOTE: Do NOT set the `selected` property here - React Flow manages selection state
   // through onNodesChange -> applyNodeChanges. The rawNodes already have `selected`
-  // set correctly. We only apply visual styling (dimming, highlight ring) based on
-  // selectedNodeIds (which is derived from onSelectionChange).
+  // set correctly.
+  //
+  // Selection highlighting is handled by CSS (.react-flow__node.selected)
+  // We only apply custom dimming for unconnected nodes via inline styles.
   const nodes = useMemo(() => {
-    // No selection - return nodes with any selection styling explicitly removed
-    // We need to remove boxShadow/opacity that may have been persisted to the store
+    // No selection - return nodes with any dimming explicitly removed
+    // We need to remove opacity that may have been persisted to the store
     // from previous selection styling (via onNodesChange)
     if (selectedNodeIds.size === 0) {
       return rawNodes.map((node) => ({
         ...node,
         style: {
           ...node.style,
-          boxShadow: undefined, // Remove selection highlight
           opacity: undefined // Reset opacity (removes dimming)
         }
       }))
@@ -369,20 +390,16 @@ function GraphCanvas(): React.JSX.Element {
     // Apply dimming to nodes not in the connected set
     return rawNodes.map((node) => {
       const isConnected = connectedIds.has(node.id)
-      const isSelected = selectedNodeIds.has(node.id)
 
       if (isConnected) {
-        // Keep full opacity, but add a highlight ring for selected nodes
-        if (isSelected) {
-          return {
-            ...node,
-            style: {
-              ...node.style,
-              boxShadow: '0 0 0 2px #22d3ee, 0 0 12px 2px rgba(34, 211, 238, 0.4)'
-            }
+        // Connected nodes have full opacity - return new object to clear persisted opacity
+        return {
+          ...node,
+          style: {
+            ...node.style,
+            opacity: undefined // Clear any persisted dimming from store
           }
         }
-        return node
       }
 
       // Dim unconnected nodes
