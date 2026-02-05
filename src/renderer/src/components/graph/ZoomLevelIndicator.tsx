@@ -17,8 +17,14 @@ export function ZoomLevelIndicator({
 }: ZoomLevelIndicatorProps): React.JSX.Element {
   const zoomLevel = useGraphStore((state) => state.zoomLevel)
   const activeModuleId = useGraphStore((state) => state.activeModuleId)
+  const semanticAnalysis = useGraphStore((state) => state.semanticAnalysis)
   const setZoomLevel = useGraphStore((state) => state.setZoomLevel)
   const closeSymbolView = useGraphStore((state) => state.closeSymbolView)
+
+  // Get the active module name when in symbol view
+  const activeModuleName = activeModuleId
+    ? semanticAnalysis?.modules.find((m) => m.id === activeModuleId)?.name
+    : null
 
   // When in symbol view, show module as active (symbol is a sub-view of module)
   const effectiveZoomLevel = zoomLevel === 'symbol' ? 'module' : zoomLevel
@@ -50,12 +56,12 @@ export function ZoomLevelIndicator({
           )}
         </div>
       ))}
-      {/* Show symbol indicator when in symbol view */}
-      {zoomLevel === 'symbol' && activeModuleId && (
+      {/* Show module name indicator when in symbol view */}
+      {zoomLevel === 'symbol' && activeModuleId && activeModuleName && (
         <>
           <ChevronRight className="mx-0.5 h-3.5 w-3.5 text-slate-600" />
           <span className="ml-1 rounded-md bg-cyan-500/20 px-2.5 py-1 text-xs font-medium text-cyan-300">
-            Symbols
+            {activeModuleName}
           </span>
         </>
       )}
