@@ -21,6 +21,7 @@ import {
   isStepAnalysisComplete,
   getStepCacheManifest
 } from './cacheManager'
+import { extractProjectSymbols } from './symbolExtractor'
 import type {
   SemanticAnalysis,
   SystemNode,
@@ -867,18 +868,82 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       } as Step3DomainsResult & { updatedModules: ModuleNode[] })
     }
 
-    // We need symbol dependencies for step 4 - this should come from the symbol extractor
-    // For now, we'll error out if we don't have the symbol data
-    // The caller should ensure symbols are extracted before calling analyzeSemantics
-    onProgress('Waiting for symbol extraction...')
+    // Steps 1-3 complete - now extract symbols and compute dependencies (steps 4-5)
+    onProgress('Step 4/5: Extracting code symbols...')
 
-    // We'll need to be called with the project symbols later
-    // For now, return partial result indicating we need symbols
+    // Extract symbols using TypeScript compiler
+    const projectSymbols = extractProjectSymbols(projectPath)
+    console.log('[SemanticAnalyzer] Extracted symbols:', {
+      files: projectSymbols.totalFiles,
+      symbols: projectSymbols.totalSymbols,
+      edges: projectSymbols.callEdges.length
+    })
+
+    // Step 4: Compute module dependencies
+    let step4Result: Step4ModuleEdgesResult
+    if (await isStepCacheValid(projectPath, 4)) {
+      onProgress('Loading cached module dependencies...')
+      const cached = await loadStepCache(projectPath, 4)
+      if (cached) {
+        step4Result = cached.data as Step4ModuleEdgesResult
+        console.log('[SemanticAnalyzer] Loaded cached step 4')
+      } else {
+        step4Result = runStep4(step3Result.updatedModules, projectSymbols.callEdges, onProgress)
+        await saveStepCache(projectPath, 4, step4Result)
+      }
+    } else {
+      step4Result = runStep4(step3Result.updatedModules, projectSymbols.callEdges, onProgress)
+      await saveStepCache(projectPath, 4, step4Result)
+    }
+
+    // Step 5: Compute domain dependencies
+    let step5Result: Step5DomainEdgesResult
+    if (await isStepCacheValid(projectPath, 5)) {
+      onProgress('Loading cached domain dependencies...')
+      const cached = await loadStepCache(projectPath, 5)
+      if (cached) {
+        step5Result = cached.data as Step5DomainEdgesResult
+        console.log('[SemanticAnalyzer] Loaded cached step 5')
+      } else {
+        step5Result = runStep5(
+          step3Result.domains,
+          step3Result.updatedModules,
+          step4Result.edges,
+          onProgress
+        )
+        await saveStepCache(projectPath, 5, step5Result)
+      }
+    } else {
+      step5Result = runStep5(
+        step3Result.domains,
+        step3Result.updatedModules,
+        step4Result.edges,
+        onProgress
+      )
+      await saveStepCache(projectPath, 5, step5Result)
+    }
+
+    // Compute system edges from domain edges
+    const systemEdges = computeSystemEdges(step3Result.domains, step5Result.edges)
+
+    // Build final analysis
+    const analysis: SemanticAnalysis = {
+      projectPath,
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      systems: step1Result.systems,
+      domains: step3Result.domains,
+      modules: step3Result.updatedModules,
+      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges]
+    }
+
+    onProgress('Analysis complete')
+
     return {
-      success: false,
-      error:
-        'Symbol extraction required before completing steps 4-5. Please extract symbols first.',
-      completedSteps: [1, 2, 3]
+      success: true,
+      analysis,
+      cached: false,
+      completedSteps: [1, 2, 3, 4, 5]
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
