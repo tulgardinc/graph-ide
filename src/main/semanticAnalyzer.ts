@@ -34,8 +34,10 @@ import type {
   Step3DomainsResult,
   Step4ModuleEdgesResult,
   Step5DomainEdgesResult,
+  Step6ExternalDependenciesResult,
   ProjectSymbols,
-  DependencyEdge
+  DependencyEdge,
+  ExternalDependency
 } from './types'
 
 // =============================================================================
@@ -240,8 +242,70 @@ The JSON structure:
 Note: Only include modules that need their parentId updated in updatedModules.`
 
 // =============================================================================
-// ANALYSIS OPTIONS
+// STEP 6 PROMPT: External Dependencies (Communicates-With)
 // =============================================================================
+
+const STEP6_EXTERNAL_PROMPT = `You are a network dependency analyst. Your task is to identify all external services that this codebase communicates with over the network.
+
+## External Dependencies
+
+External dependencies are services outside this codebase that the code communicates with:
+- REST APIs (Stripe, Twilio, OpenAI, etc.)
+- Databases (Firebase, Supabase, external PostgreSQL, etc.)
+- Authentication services (Auth0, Clerk, Okta, etc.)
+- Storage services (S3, Cloudinary, etc.)
+- Messaging services (SendGrid, SNS, etc.)
+- Any HTTP/HTTPS endpoint not part of this project
+
+## Your Task
+
+1. Read package.json to identify network-related dependencies (axios, fetch is built-in, supabase, firebase, apollo, etc.)
+2. Use search_codebase to find network calls in the codebase
+3. read_file relevant code snippets to identify the external services
+4. Map each external dependency to the module(s) that use it
+
+## Available Tools
+
+- **list_files**: See directory structure
+- **read_file**: Read file contents
+- **search_codebase**: Find patterns/keywords (use patterns like fetch\\(|axios|XMLHttpRequest|WebSocket|http\\.createServer|https\\.request)
+- **get_file_symbols**: See what files export
+
+## Rules
+
+- MAXIMUM 30 tool calls total - use them efficiently
+- Focus on finding unique external services, not every call site
+- Identify the service name, URL pattern, and which module uses it
+- Even if the other side is in this project (e.g., localhost:3000), classify it as communicates-with
+- Include authentication method if identifiable (Bearer token, API key, OAuth, etc.)
+
+## Output Format - CRITICAL INSTRUCTION
+
+Output ONLY a valid JSON object starting with '{'.
+
+**CRITICAL RULES:**
+1. Start with '{' immediately
+2. NO text before the JSON
+3. NO markdown code blocks
+4. NO explanations after
+
+The JSON structure:
+
+{
+  "externalDependencies": [
+    {
+      "id": "external:stripe-api",
+      "name": "Stripe",
+      "urlPattern": "https://api.stripe.com/v1",
+      "type": "api",
+      "authType": "bearer-token",
+      "sourceModules": ["module:payment-processor"],
+      "endpoints": [
+        {"path": "/v1/charges", "method": "POST", "file": "src/payment/stripe.ts", "line": 45}
+      ]
+    }
+  ]
+}`
 
 export interface AnalyzeOptions {
   projectPath: string
@@ -544,6 +608,120 @@ Begin analysis now.`
 }
 
 // =============================================================================
+// STEP 6: External Dependencies Detection
+// =============================================================================
+
+async function runStep6(
+  projectPath: string,
+  step2Result: Step2ModulesResult,
+  step3Result: { domains: DomainNode[]; updatedModules: ModuleNode[] },
+  onProgress: (status: string) => void,
+  onToolStart: (toolName: string, description: string) => void,
+  onToolEnd: (toolName: string, result: string) => void
+): Promise<Step6ExternalDependenciesResult> {
+  onProgress('Step 6/6: Detecting external dependencies...')
+
+  const systemsInfo = `Systems: ${step3Result.domains
+    .map((d) => d.parentId)
+    .filter((id, i, arr) => arr.indexOf(id) === i)
+    .map((id) => id?.replace('system:', '') || 'unknown')
+    .join(', ')}`
+
+  const modulesInfo = step2Result.modules
+    .slice(0, 50)
+    .map((m) => `- ${m.name} (${m.id})`)
+    .join('\n')
+
+  const initialMessage = `Please identify all external services that this codebase communicates with over the network.
+
+${systemsInfo}
+
+Modules identified (first 50):
+${modulesInfo}
+
+${step2Result.modules.length > 50 ? `... and ${step2Result.modules.length - 50} more modules` : ''}
+
+First, read package.json to identify network-related dependencies. Then use search_codebase and read_file to find network calls and identify external services.
+
+MAXIMUM 30 TOOL CALLS - use them efficiently.
+
+Begin exploration now.`
+
+  let fullResponse = ''
+
+  await new Promise<void>((resolve, reject) => {
+    sendMessageWithTools(
+      {
+        messages: [{ role: 'user', content: initialMessage }],
+        systemPrompt: STEP6_EXTERNAL_PROMPT,
+        projectPath,
+        maxTokens: 8192,
+        finalResponseOnly: true
+      },
+      () => {},
+      (error) => reject(error),
+      (response) => {
+        fullResponse = response
+        resolve()
+      },
+      (toolName, description) => {
+        console.log(`[Step6] Tool: ${toolName} - ${description}`)
+        onToolStart(toolName, description)
+      },
+      (toolName, result) => {
+        onToolEnd(toolName, result)
+      }
+    )
+  })
+
+  console.log('[Step6] Response length:', fullResponse.length)
+  return parseStep6Response(fullResponse)
+}
+
+function parseStep6Response(response: string): Step6ExternalDependenciesResult {
+  const jsonStr = extractJson(response)
+  const parsed = JSON.parse(jsonStr)
+
+  if (!Array.isArray(parsed.externalDependencies)) {
+    console.warn('[Step6] Response missing "externalDependencies" array, returning empty')
+    return {
+      step: 6,
+      timestamp: new Date().toISOString(),
+      externalDependencies: []
+    }
+  }
+
+  const dependencies: ExternalDependency[] = []
+
+  for (const dep of parsed.externalDependencies) {
+    dependencies.push({
+      id: dep.id || `external:${dep.name.toLowerCase().replace(/\s+/g, '-')}`,
+      name: dep.name,
+      urlPattern: dep.urlPattern || dep.name,
+      type: dep.type || 'api',
+      authType: dep.authType,
+      sourceModules: dep.sourceModules || [],
+      endpoints: (dep.endpoints || []).map(
+        (e: { path?: string; method?: string; file: string; line: number }) => ({
+          path: e.path || '/',
+          method: e.method,
+          file: e.file,
+          line: e.line || 1
+        })
+      )
+    })
+  }
+
+  console.log(`[Step6] Identified ${dependencies.length} external dependencies`)
+
+  return {
+    step: 6,
+    timestamp: new Date().toISOString(),
+    externalDependencies: dependencies
+  }
+}
+
+// =============================================================================
 // ALGORITHMIC STEPS (4-5)
 // =============================================================================
 
@@ -728,6 +906,49 @@ function computeSystemEdges(domains: DomainNode[], domainEdges: SemanticEdge[]):
   return systemEdges
 }
 
+function computeExternalEdges(
+  externalDependencies: ExternalDependency[],
+  modules: ModuleNode[]
+): SemanticEdge[] {
+  const externalEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build module ID lookup (handle shorthand IDs)
+  const moduleIds = new Set(modules.map((m) => m.id))
+  const moduleNameToId = new Map<string, string>()
+  for (const module of modules) {
+    const shortName = module.id.replace('module:', '')
+    moduleNameToId.set(shortName, module.id)
+    moduleNameToId.set(module.name.toLowerCase().replace(/\s+/g, '-'), module.id)
+  }
+
+  for (const dep of externalDependencies) {
+    // Resolve source modules to full IDs
+    for (const sourceModule of dep.sourceModules) {
+      let resolvedModuleId = sourceModule
+
+      // If shorthand ID is provided, resolve to full ID
+      if (!moduleIds.has(sourceModule)) {
+        resolvedModuleId = moduleNameToId.get(sourceModule) || sourceModule
+      }
+
+      const edgeId = `${resolvedModuleId}->${dep.id}`
+      if (seenEdges.has(edgeId)) continue
+
+      seenEdges.add(edgeId)
+      externalEdges.push({
+        id: edgeId,
+        source: resolvedModuleId,
+        target: dep.id,
+        type: 'communicates-with'
+      })
+    }
+  }
+
+  console.log(`[ExternalEdges] Computed ${externalEdges.length} external (communicates-with) edges`)
+  return externalEdges
+}
+
 // =============================================================================
 // MAIN ANALYSIS FUNCTION
 // =============================================================================
@@ -751,7 +972,7 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
 
   try {
     // Check if we have a complete cached analysis
-    if (!forceRefresh && (await isStepAnalysisComplete(projectPath))) {
+    if (!forceRefresh && (await isStepAnalysisComplete(projectPath, 6))) {
       console.log('[SemanticAnalyzer] Using complete cached analysis')
       onProgress('Loading cached analysis...')
 
@@ -760,15 +981,17 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       const step3 = await loadStepCache(projectPath, 3)
       const step4 = await loadStepCache(projectPath, 4)
       const step5 = await loadStepCache(projectPath, 5)
+      const step6 = await loadStepCache(projectPath, 6)
 
-      if (step1 && step2 && step3 && step4 && step5) {
+      if (step1 && step2 && step3 && step4 && step5 && step6) {
         const systems = (step1.data as Step1SystemsResult).systems
         const modules = (step3.data as Step3DomainsResult & { updatedModules: ModuleNode[] })
           .updatedModules
         const domains = (step3.data as Step3DomainsResult).domains
         const moduleEdges = (step4.data as Step4ModuleEdgesResult).edges
         const domainEdges = (step5.data as Step5DomainEdgesResult).edges
-        const systemEdges = computeSystemEdges(domains, domainEdges)
+        const step6Result = step6.data as unknown as Step6ExternalDependenciesResult
+        const externalEdges = computeExternalEdges(step6Result.externalDependencies, modules)
 
         const analysis: SemanticAnalysis = {
           projectPath,
@@ -777,7 +1000,7 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
           systems,
           domains,
           modules,
-          edges: [...moduleEdges, ...domainEdges, ...systemEdges]
+          edges: [...moduleEdges, ...domainEdges, ...externalEdges]
         }
 
         const completedSteps = await getCompletedSteps(projectPath)
@@ -923,8 +1146,49 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       await saveStepCache(projectPath, 5, step5Result)
     }
 
+    // Step 6: Detect external dependencies (communicates-with)
+    let step6Result: Step6ExternalDependenciesResult
+    if (await isStepCacheValid(projectPath, 6)) {
+      onProgress('Loading cached external dependencies...')
+      const cached = await loadStepCache(projectPath, 6)
+      if (cached) {
+        step6Result = cached.data as unknown as Step6ExternalDependenciesResult
+        console.log('[SemanticAnalyzer] Loaded cached step 6')
+      } else {
+        step6Result = await runStep6(
+          projectPath,
+          step2Result,
+          step3Result,
+          onProgress,
+          onToolStart,
+          onToolEnd
+        )
+        await saveStepCache(
+          projectPath,
+          6,
+          step6Result as unknown as Step6ExternalDependenciesResult
+        )
+      }
+    } else {
+      step6Result = await runStep6(
+        projectPath,
+        step2Result,
+        step3Result,
+        onProgress,
+        onToolStart,
+        onToolEnd
+      )
+      await saveStepCache(projectPath, 6, step6Result as unknown as Step6ExternalDependenciesResult)
+    }
+
     // Compute system edges from domain edges
     const systemEdges = computeSystemEdges(step3Result.domains, step5Result.edges)
+
+    // Compute external edges (communicates-with)
+    const externalEdges = computeExternalEdges(
+      step6Result.externalDependencies,
+      step3Result.updatedModules
+    )
 
     // Build final analysis
     const analysis: SemanticAnalysis = {
@@ -934,7 +1198,7 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       systems: step1Result.systems,
       domains: step3Result.domains,
       modules: step3Result.updatedModules,
-      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges]
+      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges, ...externalEdges]
     }
 
     onProgress('Analysis complete')
@@ -943,7 +1207,7 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       success: true,
       analysis,
       cached: false,
-      completedSteps: [1, 2, 3, 4, 5]
+      completedSteps: [1, 2, 3, 4, 5, 6]
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)

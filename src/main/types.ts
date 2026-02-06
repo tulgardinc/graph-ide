@@ -301,9 +301,9 @@ export const DEFAULT_EXTRACTOR_OPTIONS: Required<ExtractorOptions> = {
 
 /**
  * Analysis steps for the 5-step pipeline
- * Steps 1-3 use LLM, Steps 4-5 are algorithmic
+ * Steps 1-3 use LLM, Steps 4-5 are algorithmic, Step 6 is LLM for external dependencies
  */
-export type AnalysisStep = 1 | 2 | 3 | 4 | 5
+export type AnalysisStep = 1 | 2 | 3 | 4 | 5 | 6
 
 /**
  * Step 1 Result: System identification
@@ -351,12 +351,13 @@ export interface Step5DomainEdgesResult {
 }
 
 /**
- * Combined edges from all dependency inference steps (4-5 + system edges)
+ * Combined edges from all dependency inference steps (4-5 + system edges + external)
  */
 export interface AlgorithmicEdges {
   moduleEdges: SemanticEdge[] // From step 4
   domainEdges: SemanticEdge[] // From step 5
   systemEdges: SemanticEdge[] // Computed from domain edges (step 5 extension)
+  externalEdges: SemanticEdge[] // From step 6 (communicates-with)
 }
 
 /**
@@ -373,6 +374,7 @@ export interface StepCacheEntry {
     | Step3DomainsResult
     | Step4ModuleEdgesResult
     | Step5DomainEdgesResult
+    | Step6ExternalDependenciesResult
 }
 
 /**
@@ -393,5 +395,40 @@ export interface StepAnalysisCacheManifest {
     3: [1, 2] // Step 3 depends on Steps 1 & 2
     4: [2] // Step 4 depends on Step 2 (modules) + symbol extraction
     5: [3, 4] // Step 5 depends on Steps 3 (domains) & 4 (module edges)
+    6: [2, 3] // Step 6 depends on Steps 2 (modules) & 3 (domains) for context
   }
+}
+
+/**
+ * External dependency detected from network/API calls
+ */
+export interface ExternalDependency {
+  /** Unique ID for this external service */
+  id: string
+  /** Service name (e.g., "Stripe", "Firebase", "OpenAI") */
+  name: string
+  /** Base URL or hostname of the service */
+  urlPattern: string
+  /** Type of external dependency */
+  type: 'api' | 'database' | 'auth' | 'storage' | 'messaging' | 'other'
+  /** Authentication method */
+  authType?: 'none' | 'api-key' | 'bearer-token' | 'oauth' | 'basic' | 'custom'
+  /** Module IDs that communicate with this external service */
+  sourceModules: string[]
+  /** Sample endpoints observed */
+  endpoints: Array<{
+    path: string
+    method?: string
+    file: string
+    line: number
+  }>
+}
+
+/**
+ * Step 6 Result: External dependency detection via LLM
+ */
+export interface Step6ExternalDependenciesResult {
+  step: 6
+  timestamp: string
+  externalDependencies: ExternalDependency[]
 }

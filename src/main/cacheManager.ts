@@ -19,7 +19,8 @@ import type {
   Step2ModulesResult,
   Step3DomainsResult,
   Step4ModuleEdgesResult,
-  Step5DomainEdgesResult
+  Step5DomainEdgesResult,
+  Step6ExternalDependenciesResult
 } from './types'
 
 // =============================================================================
@@ -473,7 +474,8 @@ async function initializeStepManifest(projectPath: string): Promise<StepAnalysis
       2: [1],
       3: [1, 2],
       4: [2],
-      5: [3, 4]
+      5: [3, 4],
+      6: [2, 3]
     }
   }
 
@@ -572,6 +574,7 @@ export async function saveStepCache(
     | Step3DomainsResult
     | Step4ModuleEdgesResult
     | Step5DomainEdgesResult
+    | Step6ExternalDependenciesResult
 ): Promise<void> {
   await initializeCache(projectPath)
 
@@ -632,15 +635,21 @@ export async function invalidateStepCaches(projectPath: string): Promise<void> {
 }
 
 /**
- * Check if step analysis is complete (all 5 steps cached)
+ * Check if step analysis is complete (all steps up to maxStep cached)
+ * @param projectPath Path to the project
+ * @param maxStep Maximum step number to check (default 5, use 6 for including external deps)
  */
-export async function isStepAnalysisComplete(projectPath: string): Promise<boolean> {
+export async function isStepAnalysisComplete(
+  projectPath: string,
+  maxStep: number = 5
+): Promise<boolean> {
   const manifest = await getStepCacheManifest(projectPath)
 
   if (!manifest) {
     return false
   }
 
-  // Check if all 5 steps are completed
-  return manifest.completedSteps.length === 5
+  // Check if all steps up to maxStep are completed
+  const requiredSteps = Array.from({ length: maxStep }, (_, i) => i + 1)
+  return requiredSteps.every((step) => manifest.completedSteps.includes(step as AnalysisStep))
 }
