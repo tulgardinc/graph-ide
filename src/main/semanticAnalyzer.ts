@@ -949,6 +949,134 @@ function computeExternalEdges(
   return externalEdges
 }
 
+function computeExternalDomainEdges(
+  externalDependencies: ExternalDependency[],
+  domains: DomainNode[]
+): SemanticEdge[] {
+  const externalEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build domain -> module map
+  const moduleToDomain = new Map<string, string>()
+  for (const domain of domains) {
+    for (const child of domain.children) {
+      if (!moduleToDomain.has(child)) {
+        moduleToDomain.set(child, domain.id)
+      }
+    }
+  }
+
+  // Aggregate module-level external edges to domain level
+  for (const dep of externalDependencies) {
+    for (const sourceModule of dep.sourceModules) {
+      const domainId = moduleToDomain.get(sourceModule)
+      if (!domainId) continue
+
+      const edgeId = `${domainId}->${dep.id}`
+      if (seenEdges.has(edgeId)) continue
+      seenEdges.add(edgeId)
+
+      externalEdges.push({
+        id: edgeId,
+        source: domainId,
+        target: dep.id,
+        type: 'communicates-with'
+      })
+    }
+  }
+
+  console.log(`[ExternalDomainEdges] Computed ${externalEdges.length} domain-level external edges`)
+  return externalEdges
+}
+
+function computeExternalSystemEdges(
+  externalDependencies: ExternalDependency[],
+  systems: SystemNode[],
+  domains: DomainNode[]
+): SemanticEdge[] {
+  const externalEdges: SemanticEdge[] = []
+  const seenEdges = new Set<string>()
+
+  // Build domain -> system map
+  const domainToSystem = new Map<string, string>()
+  for (const system of systems) {
+    for (const child of system.children) {
+      if (!domainToSystem.has(child)) {
+        domainToSystem.set(child, system.id)
+      }
+    }
+  }
+
+  // Build module -> domain map
+  const moduleToDomain = new Map<string, string>()
+  for (const domain of domains) {
+    for (const child of domain.children) {
+      if (!moduleToDomain.has(child)) {
+        moduleToDomain.set(child, domain.id)
+      }
+    }
+  }
+
+  // Build module -> system map (direct, via domain)
+  const moduleToSystem = new Map<string, string>()
+  for (const system of systems) {
+    for (const child of system.children) {
+      const domain = domains.find((d) => d.id === child)
+      if (domain) {
+        for (const moduleId of domain.children) {
+          moduleToSystem.set(moduleId, system.id)
+        }
+      }
+    }
+  }
+
+  // Aggregate module external edges to system level
+  const seenModuleSystems = new Set<string>()
+  for (const dep of externalDependencies) {
+    for (const sourceModule of dep.sourceModules) {
+      const systemId = moduleToSystem.get(sourceModule)
+      if (!systemId) continue
+
+      const key = `${systemId}->${dep.id}`
+      if (seenEdges.has(key)) continue
+      seenEdges.add(key)
+
+      externalEdges.push({
+        id: key,
+        source: systemId,
+        target: dep.id,
+        type: 'communicates-with'
+      })
+      seenModuleSystems.add(key)
+    }
+  }
+
+  // Also aggregate domain external edges to system level
+  for (const dep of externalDependencies) {
+    for (const sourceModule of dep.sourceModules) {
+      const domainId = moduleToDomain.get(sourceModule)
+      if (!domainId) continue
+
+      const systemId = domainToSystem.get(domainId)
+      if (!systemId) continue
+
+      const key = `${systemId}->${dep.id}`
+      if (seenEdges.has(key) || seenModuleSystems.has(key)) continue
+      seenEdges.add(key)
+
+      externalEdges.push({
+        id: key,
+        source: systemId,
+        target: dep.id,
+        type: 'communicates-with'
+      })
+    }
+  }
+
+  console.log(`[ExternalSystemEdges] Computed ${externalEdges.length} system-level external edges`)
+  return externalEdges
+}
+
 // =============================================================================
 // MAIN ANALYSIS FUNCTION
 // =============================================================================
@@ -1189,6 +1317,15 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       step6Result.externalDependencies,
       step3Result.updatedModules
     )
+    const externalDomainEdges = computeExternalDomainEdges(
+      step6Result.externalDependencies,
+      step3Result.domains
+    )
+    const externalSystemEdges = computeExternalSystemEdges(
+      step6Result.externalDependencies,
+      step1Result.systems,
+      step3Result.domains
+    )
 
     // Build final analysis
     const analysis: SemanticAnalysis = {
@@ -1198,7 +1335,14 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
       systems: step1Result.systems,
       domains: step3Result.domains,
       modules: step3Result.updatedModules,
-      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges, ...externalEdges]
+      edges: [
+        ...step4Result.edges,
+        ...step5Result.edges,
+        ...systemEdges,
+        ...externalEdges,
+        ...externalDomainEdges,
+        ...externalSystemEdges
+      ]
     }
 
     onProgress('Analysis complete')
@@ -1222,7 +1366,7 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
 }
 
 /**
- * Complete the analysis with symbol dependencies (steps 4-5)
+ * Complete the analysis with symbol dependencies (steps 4-6)
  * This should be called after symbol extraction is complete
  */
 export async function completeAnalysisWithSymbols(
@@ -1282,6 +1426,18 @@ export async function completeAnalysisWithSymbols(
       await saveStepCache(projectPath, 5, step5Result)
     }
 
+    // Step 6: Load external dependencies (communicates-with)
+    let step6Result: Step6ExternalDependenciesResult | null = null
+    let externalEdges: SemanticEdge[] = []
+    if (await isStepCacheValid(projectPath, 6)) {
+      onProgress('Loading cached external dependencies...')
+      const cached = await loadStepCache(projectPath, 6)
+      if (cached) {
+        step6Result = cached.data as unknown as Step6ExternalDependenciesResult
+        externalEdges = computeExternalEdges(step6Result.externalDependencies, modules)
+      }
+    }
+
     // Compute system edges
     const systemEdges = computeSystemEdges(domains, step5Result.edges)
 
@@ -1293,7 +1449,7 @@ export async function completeAnalysisWithSymbols(
       systems,
       domains,
       modules,
-      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges]
+      edges: [...step4Result.edges, ...step5Result.edges, ...systemEdges, ...externalEdges]
     }
 
     onProgress('Analysis complete')
@@ -1302,7 +1458,7 @@ export async function completeAnalysisWithSymbols(
       success: true,
       analysis,
       cached: false,
-      completedSteps: [1, 2, 3, 4, 5]
+      completedSteps: step6Result ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -1319,7 +1475,7 @@ export async function completeAnalysisWithSymbols(
  * Get cached analysis without running LLM (fast)
  */
 export async function getCachedAnalysis(projectPath: string): Promise<SemanticAnalysis | null> {
-  if (!(await isStepAnalysisComplete(projectPath))) {
+  if (!(await isStepAnalysisComplete(projectPath, 6))) {
     return null
   }
 
@@ -1329,8 +1485,9 @@ export async function getCachedAnalysis(projectPath: string): Promise<SemanticAn
     const step3 = await loadStepCache(projectPath, 3)
     const step4 = await loadStepCache(projectPath, 4)
     const step5 = await loadStepCache(projectPath, 5)
+    const step6 = await loadStepCache(projectPath, 6)
 
-    if (!step1 || !step2 || !step3 || !step4 || !step5) {
+    if (!step1 || !step2 || !step3 || !step4 || !step5 || !step6) {
       return null
     }
 
@@ -1340,7 +1497,19 @@ export async function getCachedAnalysis(projectPath: string): Promise<SemanticAn
     const domains = (step3.data as Step3DomainsResult).domains
     const moduleEdges = (step4.data as Step4ModuleEdgesResult).edges
     const domainEdges = (step5.data as Step5DomainEdgesResult).edges
+    const step6Result = step6.data as unknown as Step6ExternalDependenciesResult
+
     const systemEdges = computeSystemEdges(domains, domainEdges)
+    const externalEdges = computeExternalEdges(step6Result.externalDependencies, modules)
+    const externalDomainEdges = computeExternalDomainEdges(
+      step6Result.externalDependencies,
+      domains
+    )
+    const externalSystemEdges = computeExternalSystemEdges(
+      step6Result.externalDependencies,
+      systems,
+      domains
+    )
 
     return {
       projectPath,
@@ -1349,7 +1518,14 @@ export async function getCachedAnalysis(projectPath: string): Promise<SemanticAn
       systems,
       domains,
       modules,
-      edges: [...moduleEdges, ...domainEdges, ...systemEdges]
+      edges: [
+        ...moduleEdges,
+        ...domainEdges,
+        ...systemEdges,
+        ...externalEdges,
+        ...externalDomainEdges,
+        ...externalSystemEdges
+      ]
     }
   } catch (error) {
     console.error('[SemanticAnalyzer] Error loading cached analysis:', error)
@@ -1361,7 +1537,7 @@ export async function getCachedAnalysis(projectPath: string): Promise<SemanticAn
  * Check if valid semantic analysis cache exists
  */
 export async function hasValidAnalysis(projectPath: string): Promise<boolean> {
-  return await isStepAnalysisComplete(projectPath)
+  return await isStepAnalysisComplete(projectPath, 6)
 }
 
 /**
@@ -1387,7 +1563,7 @@ export async function getCacheInfo(projectPath: string): Promise<{
     }
   }
 
-  const valid = await isStepAnalysisComplete(projectPath)
+  const valid = await isStepAnalysisComplete(projectPath, 6)
 
   return {
     exists,
