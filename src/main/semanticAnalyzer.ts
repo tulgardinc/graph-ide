@@ -242,70 +242,8 @@ The JSON structure:
 Note: Only include modules that need their parentId updated in updatedModules.`
 
 // =============================================================================
-// STEP 6 PROMPT: External Dependencies (Communicates-With)
+// STEP PROMPTS
 // =============================================================================
-
-const STEP6_EXTERNAL_PROMPT = `You are a network dependency analyst. Your task is to identify all external services that this codebase communicates with over the network.
-
-## External Dependencies
-
-External dependencies are services outside this codebase that the code communicates with:
-- REST APIs (Stripe, Twilio, OpenAI, etc.)
-- Databases (Firebase, Supabase, external PostgreSQL, etc.)
-- Authentication services (Auth0, Clerk, Okta, etc.)
-- Storage services (S3, Cloudinary, etc.)
-- Messaging services (SendGrid, SNS, etc.)
-- Any HTTP/HTTPS endpoint not part of this project
-
-## Your Task
-
-1. Read package.json to identify network-related dependencies (axios, fetch is built-in, supabase, firebase, apollo, etc.)
-2. Use search_codebase to find network calls in the codebase
-3. read_file relevant code snippets to identify the external services
-4. Map each external dependency to the module(s) that use it
-
-## Available Tools
-
-- **list_files**: See directory structure
-- **read_file**: Read file contents
-- **search_codebase**: Find patterns/keywords (use patterns like fetch\\(|axios|XMLHttpRequest|WebSocket|http\\.createServer|https\\.request)
-- **get_file_symbols**: See what files export
-
-## Rules
-
-- MAXIMUM 30 tool calls total - use them efficiently
-- Focus on finding unique external services, not every call site
-- Identify the service name, URL pattern, and which module uses it
-- Even if the other side is in this project (e.g., localhost:3000), classify it as communicates-with
-- Include authentication method if identifiable (Bearer token, API key, OAuth, etc.)
-
-## Output Format - CRITICAL INSTRUCTION
-
-Output ONLY a valid JSON object starting with '{'.
-
-**CRITICAL RULES:**
-1. Start with '{' immediately
-2. NO text before the JSON
-3. NO markdown code blocks
-4. NO explanations after
-
-The JSON structure:
-
-{
-  "externalDependencies": [
-    {
-      "id": "external:stripe-api",
-      "name": "Stripe",
-      "urlPattern": "https://api.stripe.com/v1",
-      "type": "api",
-      "authType": "bearer-token",
-      "sourceModules": ["module:payment-processor"],
-      "endpoints": [
-        {"path": "/v1/charges", "method": "POST", "file": "src/payment/stripe.ts", "line": 45}
-      ]
-    }
-  ]
-}`
 
 export interface AnalyzeOptions {
   projectPath: string
@@ -629,10 +567,91 @@ async function runStep6(
 
   const modulesInfo = step2Result.modules
     .slice(0, 50)
-    .map((m) => `- ${m.name} (${m.id})`)
+    .map((m) => `- \`${m.id}\`: ${m.name} - ${m.summary || 'No description'}`)
     .join('\n')
 
-  const initialMessage = `Please identify all external services that this codebase communicates with over the network.
+  const step6Prompt = `You are a network dependency analyst. Your task is to identify all services that this codebase communicates with over the network and classify them as INTERNAL or EXTERNAL.
+
+## Dependency Classification
+
+### INTERNAL Dependencies
+Services that are PART OF THIS PROJECT (same codebase/monorepo):
+- Backend API running on localhost when frontend is in the same project
+- Internal microservices within the same repository
+- Example: \`http://localhost:3001\` when project has a backend module
+
+### EXTERNAL Dependencies  
+Third-party services OUTSIDE THIS PROJECT:
+- REST APIs (Stripe, Twilio, OpenAI, etc.)
+- Databases (Firebase, Supabase, external PostgreSQL, etc.)
+- Authentication services (Auth0, Clerk, Okta, etc.)
+- Storage services (S3, Cloudinary, etc.)
+- Example: \`https://api.stripe.com\`, \`https://firebaseio.com\`
+
+## Your Task
+
+1. Read package.json to identify network-related dependencies
+2. Use search_codebase to find network calls in the codebase
+3. read_file relevant code to identify the services
+4. CLASSIFY each service as INTERNAL or EXTERNAL
+5. For INTERNAL: Identify which module(s) in THIS project handle the requests
+6. For EXTERNAL: Create a unique ID for the external service
+
+## Module Reference
+
+Use this information to identify internal targets. Match the URL pattern to the module's purpose:
+
+${modulesInfo}
+
+## Rules
+
+- MAXIMUM 30 tool calls total - use them efficiently
+- Focus on finding unique services, not every call site
+- For INTERNAL: You MUST specify which module(s) handle the URL in targetModules
+- For EXTERNAL: Create a descriptive ID (e.g., "external:stripe-api", "external:firebase")
+- If you cannot determine the internal target module, classify as EXTERNAL
+- Include authentication method if identifiable
+
+## Output Format - CRITICAL INSTRUCTION
+
+Output ONLY a valid JSON object starting with '{'.
+
+**CRITICAL RULES:**
+1. Start with '{' immediately
+2. NO text before the JSON
+3. NO markdown code blocks
+4. NO explanations after
+
+The JSON structure:
+
+{
+  "externalDependencies": [
+    {
+      "dependencyType": "internal",
+      "sourceModules": ["module:todo-management"],
+      "targetModules": ["module:todo-api"],
+      "urlPattern": "http://localhost:3001",
+      "type": "api",
+      "endpoints": [
+        {"path": "/todos", "method": "GET", "file": "frontend/src/api.ts", "line": 45}
+      ]
+    },
+    {
+      "dependencyType": "external",
+      "id": "external:stripe-api",
+      "name": "Stripe API",
+      "sourceModules": ["module:payment-processor"],
+      "urlPattern": "https://api.stripe.com",
+      "type": "api",
+      "authType": "bearer-token",
+      "endpoints": [
+        {"path": "/v1/charges", "method": "POST", "file": "src/payment/stripe.ts", "line": 45}
+      ]
+    }
+  ]
+}`
+
+  const initialMessage = `Please identify all services that this codebase communicates with over the network.
 
 ${systemsInfo}
 
@@ -641,7 +660,7 @@ ${modulesInfo}
 
 ${step2Result.modules.length > 50 ? `... and ${step2Result.modules.length - 50} more modules` : ''}
 
-First, read package.json to identify network-related dependencies. Then use search_codebase and read_file to find network calls and identify external services.
+First, read package.json to identify network-related dependencies. Then use search_codebase and read_file to find network calls and identify services.
 
 MAXIMUM 30 TOOL CALLS - use them efficiently.
 
@@ -653,7 +672,7 @@ Begin exploration now.`
     sendMessageWithTools(
       {
         messages: [{ role: 'user', content: initialMessage }],
-        systemPrompt: STEP6_EXTERNAL_PROMPT,
+        systemPrompt: step6Prompt,
         projectPath,
         maxTokens: 8192,
         finalResponseOnly: true
@@ -694,13 +713,13 @@ function parseStep6Response(response: string): Step6ExternalDependenciesResult {
   const dependencies: ExternalDependency[] = []
 
   for (const dep of parsed.externalDependencies) {
-    dependencies.push({
-      id: dep.id || `external:${dep.name.toLowerCase().replace(/\s+/g, '-')}`,
-      name: dep.name,
-      urlPattern: dep.urlPattern || dep.name,
-      type: dep.type || 'api',
-      authType: dep.authType,
+    const dependencyType = dep.dependencyType || 'external'
+
+    const dependency: ExternalDependency = {
+      dependencyType,
       sourceModules: dep.sourceModules || [],
+      urlPattern: dep.urlPattern || dep.name || 'unknown',
+      type: dep.type || 'api',
       endpoints: (dep.endpoints || []).map(
         (e: { path?: string; method?: string; file: string; line: number }) => ({
           path: e.path || '/',
@@ -709,10 +728,23 @@ function parseStep6Response(response: string): Step6ExternalDependenciesResult {
           line: e.line || 1
         })
       )
-    })
+    }
+
+    if (dependencyType === 'internal') {
+      dependency.targetModules = dep.targetModules || []
+    } else {
+      dependency.id =
+        dep.id || `external:${dep.name?.toLowerCase().replace(/\s+/g, '-') || 'unknown'}`
+      dependency.name = dep.name || 'Unknown External Service'
+      dependency.authType = dep.authType
+    }
+
+    dependencies.push(dependency)
   }
 
-  console.log(`[Step6] Identified ${dependencies.length} external dependencies`)
+  console.log(
+    `[Step6] Identified ${dependencies.length} dependencies (${dependencies.filter((d) => d.dependencyType === 'internal').length} internal, ${dependencies.filter((d) => d.dependencyType === 'external').length} external)`
+  )
 
   return {
     step: 6,
@@ -925,23 +957,46 @@ function computeExternalEdges(
   for (const dep of externalDependencies) {
     // Resolve source modules to full IDs
     for (const sourceModule of dep.sourceModules) {
-      let resolvedModuleId = sourceModule
+      let resolvedSourceId = sourceModule
 
       // If shorthand ID is provided, resolve to full ID
       if (!moduleIds.has(sourceModule)) {
-        resolvedModuleId = moduleNameToId.get(sourceModule) || sourceModule
+        resolvedSourceId = moduleNameToId.get(sourceModule) || sourceModule
       }
 
-      const edgeId = `${resolvedModuleId}->${dep.id}`
-      if (seenEdges.has(edgeId)) continue
+      if (dep.dependencyType === 'internal' && dep.targetModules) {
+        // Internal: Create edges from source module to target modules
+        for (const targetModule of dep.targetModules) {
+          let resolvedTargetId = targetModule
 
-      seenEdges.add(edgeId)
-      externalEdges.push({
-        id: edgeId,
-        source: resolvedModuleId,
-        target: dep.id,
-        type: 'communicates-with'
-      })
+          if (!moduleIds.has(targetModule)) {
+            resolvedTargetId = moduleNameToId.get(targetModule) || targetModule
+          }
+
+          const edgeId = `${resolvedSourceId}->${resolvedTargetId}`
+          if (seenEdges.has(edgeId)) continue
+
+          seenEdges.add(edgeId)
+          externalEdges.push({
+            id: edgeId,
+            source: resolvedSourceId,
+            target: resolvedTargetId,
+            type: 'communicates-with'
+          })
+        }
+      } else if (dep.id) {
+        // External: Create edge from source module to external node
+        const edgeId = `${resolvedSourceId}->${dep.id}`
+        if (seenEdges.has(edgeId)) continue
+
+        seenEdges.add(edgeId)
+        externalEdges.push({
+          id: edgeId,
+          source: resolvedSourceId,
+          target: dep.id,
+          type: 'communicates-with'
+        })
+      }
     }
   }
 
@@ -956,7 +1011,7 @@ function computeExternalDomainEdges(
   const externalEdges: SemanticEdge[] = []
   const seenEdges = new Set<string>()
 
-  // Build domain -> module map
+  // Build module -> domain map
   const moduleToDomain = new Map<string, string>()
   for (const domain of domains) {
     for (const child of domain.children) {
@@ -966,22 +1021,47 @@ function computeExternalDomainEdges(
     }
   }
 
-  // Aggregate module-level external edges to domain level
   for (const dep of externalDependencies) {
-    for (const sourceModule of dep.sourceModules) {
-      const domainId = moduleToDomain.get(sourceModule)
-      if (!domainId) continue
+    if (dep.dependencyType === 'internal' && dep.targetModules) {
+      // Internal: Aggregate module→module edges to domain→domain edges
+      for (const sourceModule of dep.sourceModules) {
+        const sourceDomain = moduleToDomain.get(sourceModule)
+        if (!sourceDomain) continue
 
-      const edgeId = `${domainId}->${dep.id}`
-      if (seenEdges.has(edgeId)) continue
-      seenEdges.add(edgeId)
+        for (const targetModule of dep.targetModules) {
+          const targetDomain = moduleToDomain.get(targetModule)
+          if (!targetDomain) continue
+          if (sourceDomain === targetDomain) continue
 
-      externalEdges.push({
-        id: edgeId,
-        source: domainId,
-        target: dep.id,
-        type: 'communicates-with'
-      })
+          const edgeId = `${sourceDomain}->${targetDomain}`
+          if (seenEdges.has(edgeId)) continue
+          seenEdges.add(edgeId)
+
+          externalEdges.push({
+            id: edgeId,
+            source: sourceDomain,
+            target: targetDomain,
+            type: 'communicates-with'
+          })
+        }
+      }
+    } else if (dep.id) {
+      // External: Aggregate module→external to domain→external
+      for (const sourceModule of dep.sourceModules) {
+        const domainId = moduleToDomain.get(sourceModule)
+        if (!domainId) continue
+
+        const edgeId = `${domainId}->${dep.id}`
+        if (seenEdges.has(edgeId)) continue
+        seenEdges.add(edgeId)
+
+        externalEdges.push({
+          id: edgeId,
+          source: domainId,
+          target: dep.id,
+          type: 'communicates-with'
+        })
+      }
     }
   }
 
@@ -1030,46 +1110,74 @@ function computeExternalSystemEdges(
     }
   }
 
-  // Aggregate module external edges to system level
   const seenModuleSystems = new Set<string>()
+
   for (const dep of externalDependencies) {
-    for (const sourceModule of dep.sourceModules) {
-      const systemId = moduleToSystem.get(sourceModule)
-      if (!systemId) continue
+    if (dep.dependencyType === 'internal' && dep.targetModules) {
+      // Internal: Aggregate module→module to domain→domain to system→system
+      for (const sourceModule of dep.sourceModules) {
+        const sourceDomain = moduleToDomain.get(sourceModule)
+        if (!sourceDomain) continue
+        const sourceSystem = domainToSystem.get(sourceDomain)
+        if (!sourceSystem) continue
 
-      const key = `${systemId}->${dep.id}`
-      if (seenEdges.has(key)) continue
-      seenEdges.add(key)
+        for (const targetModule of dep.targetModules) {
+          const targetDomain = moduleToDomain.get(targetModule)
+          if (!targetDomain) continue
+          const targetSystem = domainToSystem.get(targetDomain)
+          if (!targetSystem) continue
+          if (sourceSystem === targetSystem) continue
 
-      externalEdges.push({
-        id: key,
-        source: systemId,
-        target: dep.id,
-        type: 'communicates-with'
-      })
-      seenModuleSystems.add(key)
-    }
-  }
+          const key = `${sourceSystem}->${targetSystem}`
+          if (seenEdges.has(key)) continue
+          seenEdges.add(key)
 
-  // Also aggregate domain external edges to system level
-  for (const dep of externalDependencies) {
-    for (const sourceModule of dep.sourceModules) {
-      const domainId = moduleToDomain.get(sourceModule)
-      if (!domainId) continue
+          externalEdges.push({
+            id: key,
+            source: sourceSystem,
+            target: targetSystem,
+            type: 'communicates-with'
+          })
+        }
+      }
+    } else if (dep.id) {
+      // External: Aggregate module→external to system→external
+      for (const sourceModule of dep.sourceModules) {
+        const systemId = moduleToSystem.get(sourceModule)
+        if (!systemId) continue
 
-      const systemId = domainToSystem.get(domainId)
-      if (!systemId) continue
+        const key = `${systemId}->${dep.id}`
+        if (seenEdges.has(key)) continue
+        seenEdges.add(key)
 
-      const key = `${systemId}->${dep.id}`
-      if (seenEdges.has(key) || seenModuleSystems.has(key)) continue
-      seenEdges.add(key)
+        externalEdges.push({
+          id: key,
+          source: systemId,
+          target: dep.id,
+          type: 'communicates-with'
+        })
+        seenModuleSystems.add(key)
+      }
 
-      externalEdges.push({
-        id: key,
-        source: systemId,
-        target: dep.id,
-        type: 'communicates-with'
-      })
+      // Also aggregate domain external edges to system level
+      for (const sourceModule of dep.sourceModules) {
+        const domainId = moduleToDomain.get(sourceModule)
+        if (!domainId) continue
+
+        const systemId = domainToSystem.get(domainId)
+        if (!systemId) continue
+
+        const key = `${systemId}->${dep.id}`
+        if (seenEdges.has(key) || seenModuleSystems.has(key)) continue
+        seenEdges.add(key)
+
+        externalEdges.push({
+          id: key,
+          source: systemId,
+          target: dep.id,
+          type: 'communicates-with'
+        })
+      }
     }
   }
 
@@ -1077,9 +1185,11 @@ function computeExternalSystemEdges(
   return externalEdges
 }
 
-// =============================================================================
-// MAIN ANALYSIS FUNCTION
-// =============================================================================
+function populateSystemChildren(systems: SystemNode[], domains: DomainNode[]): void {
+  for (const system of systems) {
+    system.children = domains.filter((d) => d.parentId === system.id).map((d) => d.id)
+  }
+}
 
 export async function analyzeSemantics(options: AnalyzeOptions): Promise<AnalysisResult> {
   const {
@@ -1312,6 +1422,9 @@ export async function analyzeSemantics(options: AnalyzeOptions): Promise<Analysi
     // Compute system edges from domain edges
     const systemEdges = computeSystemEdges(step3Result.domains, step5Result.edges)
 
+    // Populate system children from domains (needed for system-level edge computation)
+    populateSystemChildren(step1Result.systems, step3Result.domains)
+
     // Compute external edges (communicates-with)
     const externalEdges = computeExternalEdges(
       step6Result.externalDependencies,
@@ -1498,6 +1611,9 @@ export async function getCachedAnalysis(projectPath: string): Promise<SemanticAn
     const moduleEdges = (step4.data as Step4ModuleEdgesResult).edges
     const domainEdges = (step5.data as Step5DomainEdgesResult).edges
     const step6Result = step6.data as unknown as Step6ExternalDependenciesResult
+
+    // Populate system children from domains (needed for system-level edge computation)
+    populateSystemChildren(systems, domains)
 
     const systemEdges = computeSystemEdges(domains, domainEdges)
     const externalEdges = computeExternalEdges(step6Result.externalDependencies, modules)

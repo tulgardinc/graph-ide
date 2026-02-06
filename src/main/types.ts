@@ -401,20 +401,33 @@ export interface StepAnalysisCacheManifest {
 
 /**
  * External dependency detected from network/API calls
+ * Supports hybrid classification: internal (within project) vs external (third-party)
  */
 export interface ExternalDependency {
-  /** Unique ID for this external service */
-  id: string
-  /** Service name (e.g., "Stripe", "Firebase", "OpenAI") */
-  name: string
-  /** Base URL or hostname of the service */
-  urlPattern: string
-  /** Type of external dependency */
-  type: 'api' | 'database' | 'auth' | 'storage' | 'messaging' | 'other'
-  /** Authentication method */
-  authType?: 'none' | 'api-key' | 'bearer-token' | 'oauth' | 'basic' | 'custom'
-  /** Module IDs that communicate with this external service */
+  /** Whether this dependency is internal (same project) or external (third-party) */
+  dependencyType: 'internal' | 'external'
+
+  /** Module IDs that communicate with this service (source of the call) */
   sourceModules: string[]
+
+  /** For INTERNAL: Module IDs that handle requests at this URL (target) */
+  targetModules?: string[]
+
+  /** Base URL or hostname pattern */
+  urlPattern: string
+
+  /** Type of dependency */
+  type: 'api' | 'database' | 'auth' | 'storage' | 'messaging' | 'other'
+
+  /** Authentication method (external only) */
+  authType?: 'none' | 'api-key' | 'bearer-token' | 'oauth' | 'basic' | 'custom'
+
+  /** Service name (external only, used as node ID prefix) */
+  name?: string
+
+  /** Unique ID (external only, e.g., "external:stripe-api") */
+  id?: string
+
   /** Sample endpoints observed */
   endpoints: Array<{
     path: string
