@@ -571,6 +571,18 @@ function extractCallDependencyEdges(
             // Get the name from the symbol directly (works for all declaration types)
             calleeName = symbolToUse.getName()
 
+            // Handle default exports: symbol name is "default" but declaration has actual name
+            if (calleeName === 'default' && declarations.length > 0) {
+              const decl = declarations[0]
+              // Try to get name from the declaration (FunctionDeclaration, ClassDeclaration, etc.)
+              if (Node.isFunctionDeclaration(decl) || Node.isClassDeclaration(decl)) {
+                calleeName = decl.getName() || calleeName
+              } else if (Node.isVariableDeclaration(decl)) {
+                calleeName = decl.getName() || calleeName
+              }
+              // If still "default", we'll try the fallback below
+            }
+
             // Special handling for class methods: ClassName.methodName
             if (Node.isMethodDeclaration(decl)) {
               const parentClass = decl.getParent()
@@ -662,6 +674,20 @@ function extractCallDependencyEdges(
             const decl = declarations[0]
             componentFilePath = toRelativePath(decl.getSourceFile().getFilePath(), projectRoot)
             componentName = symbolToUse.getName()
+
+            // Handle default exports: symbol name is "default" but declaration has actual name
+            if (componentName === 'default') {
+              // Try to get name from the declaration (FunctionDeclaration, ClassDeclaration, etc.)
+              if (Node.isFunctionDeclaration(decl) || Node.isClassDeclaration(decl)) {
+                componentName = decl.getName() || componentName
+              } else if (Node.isVariableDeclaration(decl)) {
+                componentName = decl.getName() || componentName
+              }
+              // If still "default", fall back to the tag name used in JSX
+              if (componentName === 'default') {
+                componentName = tagName
+              }
+            }
           }
         }
       } catch {

@@ -252,6 +252,26 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         modules: analysis.modules.length
       })
 
+      // Populate children arrays from parentId relationships
+      // (LLM only sets parentId, doesn't populate children arrays)
+      for (const domain of analysis.domains) {
+        if (domain.parentId) {
+          const parentSystem = analysis.systems.find((s) => s.id === domain.parentId)
+          if (parentSystem && !parentSystem.children.includes(domain.id)) {
+            parentSystem.children.push(domain.id)
+          }
+        }
+      }
+      for (const module of analysis.modules) {
+        if (module.parentId) {
+          const parentDomain = analysis.domains.find((d) => d.id === module.parentId)
+          if (parentDomain && !parentDomain.children.includes(module.id)) {
+            parentDomain.children.push(module.id)
+          }
+        }
+      }
+      console.log('[GraphStore] Populated children arrays for drill-down navigation')
+
       // Build color map for unique colors with parent-child border inheritance
       const colorMap = buildColorMap(analysis.systems, analysis.domains, analysis.modules)
       console.log('[GraphStore] Built color map for', colorMap.size, 'nodes')
